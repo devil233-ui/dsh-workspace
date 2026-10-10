@@ -1,4 +1,4 @@
-﻿/*
+/*
  * @Description: dsh-workspace 浏览器端入口 —— 左侧入口行 + 主区整页
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/index.tsx
@@ -13,6 +13,8 @@ import { registerRemoteSidebar } from './sidebar/register.js'
 import { onTakeoverChange } from './workspace/takeover.js'
 import { readAwaiting, requestSection } from './page/update-flag.js'
 import { closeBridgeDrawer, holdSlotHead, shieldAddWorkspaceClicks, type SlotsPeek } from './workspace/bridge-compat.js'
+import { loadSidebarPrefs } from './sidebar-prefs.js'
+import { installAppearance } from './appearance.js'
 
 export const name = 'dsh-workspace'
 
@@ -118,6 +120,11 @@ export function apply(ctx: ClientContext): void {
     }, 300)
     ctx.effect(() => () => clearTimeout(reopen), 'dsh-workspace: reopen after update')
   }
+
+  // 「侧边栏」偏好：启动时取回一次（取回前按默认值 = 全部开启运行），标签开关、查看器、外观都跟着它走。
+  void loadSidebarPrefs(api).catch((error: unknown) => console.warn('[dsh-workspace] 读取侧边栏偏好失败，按默认值运行', error))
+  // 外观：IME 守卫 + 自定义 CSS。挂在 effect 上：插件卸载 / HMR 重载时撤销监听与样式节点。
+  ctx.effect(() => installAppearance(), 'dsh-workspace: appearance')
 
   // 远程工作区的右侧栏：远程文件查看器 / 远程文件树 / SSH 终端。失败只记控制台，不影响其余功能。
   ctx.effect(() => {

@@ -19,9 +19,10 @@ import { compareVersions, isNewer, parseVersion } from './semver.js'
 import { downloadAny, fetchLatest, type LatestRelease } from './source.js'
 import { inspectTarball, type TarballInfo } from './tarball.js'
 import type { ConnectionLog } from '../log/connection-log.js'
+import type { PluginManagerToggleLike } from '../better-sidebar.js'
 
-/** 宿主 pluginManager 服务里本模块用到的部分。 */
-export interface PluginManagerLike {
+/** 宿主 pluginManager 服务里本插件用到的部分（启用 / 禁用插件见 better-sidebar.ts）。 */
+export interface PluginManagerLike extends PluginManagerToggleLike {
   installBundle(
     spec: string,
     options?: { requestId?: string; enabled?: boolean }

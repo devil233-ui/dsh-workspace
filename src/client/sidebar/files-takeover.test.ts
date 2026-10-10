@@ -75,6 +75,18 @@ describe('manageFilesTakeover', () => {
     expect(tabs.get?.('files')?.id).toBe(BUILTIN_FILES_ID)
   })
 
+  it('dispose 之后迟到的 evaluate（偏好回调 / 推迟的通知）不再重新注册', async () => {
+    const tabs = registry()
+    tabs.register({ id: BUILTIN_FILES_ID, kind: 'files', priority: 'builtin', title: () => '' })
+    let mounted = 0
+    const m = manageFilesTakeover({ tabs, title: () => 'F', mount: () => (mounted++, () => mounted--), enabled: () => true, ready: () => true, log: () => undefined })
+    m.dispose()
+    m.evaluate()
+    await tick()
+    expect(tabs.get?.('files')?.id).toBe(BUILTIN_FILES_ID)
+    expect(mounted).toBe(0)
+  })
+
   it('偏好读到之前不做任何判断', () => {
     const tabs = registry()
     tabs.register({ id: BUILTIN_FILES_ID, kind: 'files', priority: 'builtin', title: () => '' })

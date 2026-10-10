@@ -4,6 +4,19 @@
 
 ## 未发布
 
+### 侧边栏管理页与 dsh-better-sidebar
+
+- 新增：「远程工作区」主页新增「侧边栏」页签（位于「连接日志」与「全局配置」之间），集中管理侧栏能力：
+  - 标签开关：文件管理、Git、文件查看器、SSH 终端、任务、侧边对话，切换即时注册 / 撤下（文件管理与 Git 同时作用于会话顶部标签；关闭文件查看器后文件交还宿主查看器）。
+  - 「接管 DSH『文件』侧栏」从「全局配置」迁入（偏好键不变，已有设置照常生效）。
+  - 文件关联（扩展名 → 查看器 + 默认预览 / 编辑，可增删改、一键恢复默认）、忽略规则编辑（复用原 `ignore` 偏好）、大文件阈值（默认 20MB）、HTML 默认不沙箱、文件树自动刷新、自定义「打开方式」URL 模板。
+  - Agent 打开工具 `open_in_sidebar` 开关与「自动打开任务页」开关（均默认开）。
+  - 外观：IME 守卫、自定义 CSS（见下）。
+  - 偏好统一存于宿主 `prefs.json` 的 `sidebar` 字段（新网关方法 `setSidebarPrefs`，严格校验），浏览器端经 `src/client/sidebar-prefs.ts` 读取与订阅。
+- 新增：dsh-better-sidebar 状态检测与一键禁用 / 重新启用（网关 `betterSidebarStatus` / `betterSidebarSetEnabled`，经宿主 pluginManager，整个 profile 生效，界面先确认；完成后提示刷新页面）。禁用后本插件自动接管「文件」侧栏；pluginManager 不可用时引导到宿主插件页手动处理。本插件的侧栏能力已覆盖 dsh-better-sidebar，不再依赖它。
+- 新增：IME 守卫（默认开）—— 输入法组字期间的按键在 document 捕获阶段停止传播，不再误触宿主 / 其他插件的快捷键（只 stopPropagation，不 preventDefault；终端与代码编辑器放行）。
+- 新增：自定义 CSS —— 注入 `<style data-dshws-custom>`，输入即实时生效，插件卸载 / 重载时自动撤销。
+
 ### 文件查看器
 
 - 新增：文件查看器统一（本机会话 + 远程会话）。
@@ -21,6 +34,8 @@
 - 新增：file-viewer 兜底渲染器（`src/client/viewers/lazy/fallback-renderers.ts`）—— 支持矩阵里未装配的类别（`.ppt` / `.pot`、CAD、3D、电子书等，定义复用 core 格式表）统一显示「该格式不支持在线预览，请下载后用系统应用打开」（中英文跟随查看器语言）；压缩包内的代码 / Markdown 等文本类别解码为纯文本（最多 2MB，含 NUL 字节视为二进制）。压缩包内预览与自定义关联都不再出现「尚未装配 xx renderer」的集成方提示。
 - 新增：分派白名单 `FILE_VIEWER_EXTS`（`src/client/viewers/dispatch.ts`，与装配的渲染器定义由单测校验一致）：用户把扩展名关联到 file-viewer、但该格式未装配时，文本类退回 Monaco，其余退回下载。
 - 文档：查看器第三方声明（`lib/assets/viewers/fv/NOTICE.md`，由 `scripts/build-viewers.mjs` 生成）补充 `@file-viewer/doc`（MIT）与 heic2any 内含 libheif（LGPL-3.0）的说明；`scripts/verify-viewers-browser.mjs` 新增兜底提示 / 纯文本兜底 / 不出现「尚未装配」检查，设置 `DSHWS_DOC_FIXTURE` 时另验证 .doc 正文渲染。
+
+- 不提供：底部 dock（输入框上方的终端 / 后台任务 / Git 改动面板，方案 3.9）—— 按用户决定取消，开发中的实现、页头开合按钮、「侧边栏」页签的「底部 dock」开关与偏好 `sidebar.tabs.dock` 均已删除。已有 `prefs.json` 里残留的 `tabs.dock` 读取时被忽略、下次保存不再写出；升级后仍开着的旧页面提交该键也不会让整次保存被拒。Git 标签的导航参数 `aiOpen`（打开某文件的 AI 改动 diff）保留。
 
 ## 0.12.2（2026-10-09）
 

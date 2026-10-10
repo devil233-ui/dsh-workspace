@@ -24,6 +24,8 @@ import { GitTab } from './GitTab.js'
 import { installPresentActions } from './present-actions.js'
 import { revealPlan } from './remote-index.js'
 import { FILES_KIND, TAKEOVER_FILES_ID, filesTakeover, manageFilesTakeover, onFilesTakeoverToggle, type FilesRegistry } from './files-takeover.js'
+import { getSidebarPrefs, subscribeSidebarPrefs } from '../sidebar-prefs.js'
+import type { SidebarTabKey } from '../../wire/sidebar-prefs.js'
 
 interface TabRegistry {
   register(definition: {
@@ -160,6 +162,45 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
       }
     }
 
+    /**
+     * 受「侧边栏」管理页标签开关控制的注册：开 → 注册，关 → 撤销，偏好变化时即时切换（不用刷新）。
+     * 同样挂在本子作用域上，右侧栏服务重建时随之释放并重新按偏好注册。
+     */
+    const toggled = (key: SidebarTabKey, label: string, fn: () => () => void): void => {
+      let off: (() => void) | undefined
+      const sync = (): void => {
+        const on = getSidebarPrefs().tabs[key]
+        if (on && off === undefined) {
+          try {
+            off = fn()
+          } catch (error) {
+            log(`注册右侧栏「${label}」失败`, error)
+          }
+        } else if (!on && off !== undefined) {
+          const dispose = off
+          off = undefined
+          try {
+            dispose()
+          } catch (error) {
+            log(`撤销右侧栏「${label}」失败`, error)
+          }
+        }
+      }
+      try {
+        sub.effect(() => {
+          sync()
+          const unsubscribe = subscribeSidebarPrefs(sync)
+          return () => {
+            unsubscribe()
+            off?.()
+            off = undefined
+          }
+        }, `dsh-workspace: sidebar ${label}`)
+      } catch (error) {
+        log(`注册右侧栏「${label}」失败`, error)
+      }
+    }
+
     attempt(t('side.fileViewer'), () => {
       const off = tabs.register({
         id: FILE_ID,
@@ -183,7 +224,7 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
         off()
       }
     })
-    attempt(t('side.remoteFiles'), () => {
+    toggled('files', t('side.remoteFiles'), () => {
       const off = tabs.register({
         id: FILES_ID,
         kind: FILES_ID,
@@ -197,7 +238,7 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
         off()
       }
     })
-    attempt(t('side.git'), () => {
+    toggled('git', t('side.git'), () => {
       const off = tabs.register({
         id: GIT_ID,
         kind: GIT_ID,
@@ -250,7 +291,7 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
     } catch (error) {
       log('接管「文件」侧栏失败', error)
     }
-    attempt(t('side.ssh'), () => {
+    toggled('ssh', t('side.ssh'), () => {
       const off = tabs.register({
         id: SSH_ID,
         kind: SSH_ID,
@@ -340,43 +381,47 @@ function mountConversationTabs(ctx: ClientContext, current: CurrentSession, deps
   const FilesView = make(RemoteFilesTab)
   const GitView = make(GitTab)
 
-  let registered: (() => void) | null = null
-  const register = (): (() => void) => {
-    const offs = [
-      ctx.slots.inject('conversation.view', () =>
-        ctx.slots.register({ name: 'conversation.view', id: CONV_FILES_ID, order: 20, label: () => deps.t('side.remoteFiles') }, FilesView as never)
-      ),
-      ctx.slots.inject('conversation.view', () =>
-        ctx.slots.register({ name: 'conversation.view', id: CONV_GIT_ID, order: 21, label: () => deps.t('side.git') }, GitView as never)
-      )
-    ]
-    return () => {
-      for (const off of offs) off()
-    }
-  }
+  // 两个标签各自受「侧边栏」管理页的「文件管理」「Git」开关控制（与右侧栏同一开关）。
+  const views = [
+    { tab: 'files' as const, id: CONV_FILES_ID, order: 20, label: () => deps.t('side.remoteFiles'), body: FilesView },
+    { tab: 'git' as const, id: CONV_GIT_ID, order: 21, label: () => deps.t('side.git'), body: GitView }
+  ]
+  const registered = new Map<string, () => void>()
   const sync = (): void => {
     const key = current.getSnapshot()?.key
     // 本地会话也有「文件管理」「Git 仓库」：只要会话有工作区（cwd）就注册。
     const remote = key !== undefined && deps.index.workspaceFor(key) !== undefined
-    if (remote && registered === null) {
-      try {
-        registered = register()
-      } catch (error) {
-        log('注册会话顶部标签失败', error)
+    const tabs = getSidebarPrefs().tabs
+    for (const view of views) {
+      const want = remote && tabs[view.tab]
+      const off = registered.get(view.id)
+      if (want && off === undefined) {
+        try {
+          registered.set(
+            view.id,
+            ctx.slots.inject('conversation.view', () =>
+              ctx.slots.register({ name: 'conversation.view', id: view.id, order: view.order, label: view.label }, view.body as never)
+            )
+          )
+        } catch (error) {
+          log('注册会话顶部标签失败', error)
+        }
+      } else if (!want && off !== undefined) {
+        off()
+        registered.delete(view.id)
       }
-    } else if (!remote && registered !== null) {
-      registered()
-      registered = null
     }
   }
   const offCurrent = current.subscribe(sync)
   // 远程工作区列表是异步加载的：加载完 / 新建工作区后要再判断一次。
   const offIndex = deps.index.subscribe(sync)
+  const offPrefs = subscribeSidebarPrefs(sync)
   sync()
   return () => {
     offCurrent()
     offIndex()
-    registered?.()
-    registered = null
+    offPrefs()
+    for (const off of registered.values()) off()
+    registered.clear()
   }
 }

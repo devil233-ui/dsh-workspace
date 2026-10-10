@@ -1,9 +1,11 @@
-﻿/*
+/*
  * @Description: 右侧栏注册测试（假注册表）—— 三种类型、文件地址按会话认领、单项失败不连累其他
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/sidebar/register.test.ts
  */
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { getSidebarPrefs, setSidebarPrefs } from '../sidebar-prefs.js'
+import { DEFAULT_SIDEBAR_PREFS, mergeSidebarPrefs } from '../../wire/sidebar-prefs.js'
 // 标签正文依赖 xterm / Monaco 等浏览器环境；这里只测注册逻辑，正文用占位组件替代。
 vi.mock('./SshTab.js', () => ({ SshTab: () => null }))
 vi.mock('./RemoteFilesTab.js', () => ({ RemoteFilesTab: () => null }))
@@ -68,20 +70,30 @@ describe('registerRemoteSidebar', () => {
     const f = fakeCtx()
     registerRemoteSidebar(f.ctx as never, t, api, () => undefined)
     await new Promise((r) => setTimeout(r, 0))
-    expect(f.registered.map((r) => r.kind)).toEqual(['dsh-workspace:remote-file', 'dsh-workspace:remote-files', 'dsh-workspace:git', 'dsh-workspace:ssh'])
+    expect(f.registered.map((r) => r.kind)).toEqual(['dsh-workspace:remote-file', 'dsh-workspace:remote-files', 'dsh-workspace:git', 'dshws-tasks', 'dsh-workspace:ssh'])
     expect(f.registered.find((r) => r.kind === 'dsh-workspace:ssh')?.multiple).toBe(true)
+    // 任务页出现在右侧栏引导列表。
+    expect(f.registered.find((r) => r.kind === 'dshws-tasks')?.guide).toHaveLength(1)
     // 比 better-sidebar 的 'dsh-resource://file/**' 更长：同为 extension 时胜出。
     expect(f.registered[0]?.patterns).toContain('dsh-resource://file/session/**')
-    expect(f.slots.filter((s) => s.name === 'sidebar.right.pane.tab').map((s) => s.key)).toHaveLength(4)
+    expect(f.slots.filter((s) => s.name === 'sidebar.right.pane.tab').map((s) => s.key)).toHaveLength(5)
   })
 
-  it('canOpen：远程会话里的文件认领，本地会话交还原处理方', async () => {
+  it('canOpen：远程会话与本机会话的文件都认领，解析不了的交还原处理方', async () => {
     const f = fakeCtx()
     registerRemoteSidebar(f.ctx as never, t, api, () => undefined)
     await new Promise((r) => setTimeout(r, 0))
     const canOpen = f.registered[0]?.canOpen as (a: string) => boolean
     expect(canOpen(sessionFileAddress('remote', '/srv/app/calculator/index.html'))).toBe(true)
-    expect(canOpen(sessionFileAddress('local', '/srv/app/x'))).toBe(false)
+    // 本机会话：相对路径按 cwd 拼接、绝对路径原样 —— 都由本插件查看器打开。
+    expect(canOpen(sessionFileAddress('local', 'src/a.ts'))).toBe(true)
+    expect(canOpen(sessionFileAddress('local', 'D:/Downloads/a.pdf'))).toBe(true)
+    expect(canOpen('dsh-resource://file/absolute/D:/Downloads/a.pdf')).toBe(true)
+    // 会话根目录本身（目录）、没有 cwd 的会话里的相对路径：交还宿主。
+    expect(canOpen(sessionFileAddress('local', ''))).toBe(false)
+    expect(canOpen(sessionFileAddress('none', 'a.ts'))).toBe(false)
+    // 远程会话里的非工作区 Windows 路径不认领（原修复点）。
+    expect(canOpen(sessionFileAddress('remote', 'D:/elsewhere/a.ts'))).toBe(false)
   })
 
   it('某一类型注册失败（如 kind 冲突）：记日志，其余照常注册', async () => {
@@ -89,8 +101,73 @@ describe('registerRemoteSidebar', () => {
     const logs: string[] = []
     registerRemoteSidebar(f.ctx as never, t, api, (m) => logs.push(m))
     await new Promise((r) => setTimeout(r, 0))
-    expect(f.registered.map((r) => r.kind)).toEqual(['dsh-workspace:remote-file', 'dsh-workspace:git', 'dsh-workspace:ssh'])
+    expect(f.registered.map((r) => r.kind)).toEqual(['dsh-workspace:remote-file', 'dsh-workspace:git', 'dshws-tasks', 'dsh-workspace:ssh'])
     expect(logs.some((m) => m.includes('side.remoteFiles'))).toBe(true)
+  })
+})
+
+describe('标签开关（侧边栏管理页）', () => {
+  afterEach(() => setSidebarPrefs(DEFAULT_SIDEBAR_PREFS))
+
+  it('关闭的标签不注册，打开后即时注册、再关闭即撤销；文件查看器关闭时不认领地址', async () => {
+    setSidebarPrefs(mergeSidebarPrefs(DEFAULT_SIDEBAR_PREFS, { tabs: { git: false, ssh: false, tasks: false } }))
+    const live = new Set<string>()
+    const f = fakeCtx()
+    const tabs = f.ctx.get('sidebarRightTabs') as { register(def: { kind: string }): () => void }
+    const orig = tabs.register.bind(tabs)
+    tabs.register = (def) => {
+      const off = orig(def)
+      live.add(def.kind)
+      return () => {
+        live.delete(def.kind)
+        off()
+      }
+    }
+    registerRemoteSidebar(f.ctx as never, t, api, () => undefined)
+    await new Promise((r) => setTimeout(r, 0))
+    expect([...live].sort()).toEqual(['dsh-workspace:remote-file', 'dsh-workspace:remote-files'])
+    setSidebarPrefs(mergeSidebarPrefs(getSidebarPrefs(), { tabs: { git: true } }))
+    expect(live.has('dsh-workspace:git')).toBe(true)
+    setSidebarPrefs(mergeSidebarPrefs(getSidebarPrefs(), { tabs: { tasks: true } }))
+    expect(live.has('dshws-tasks')).toBe(true)
+    setSidebarPrefs(mergeSidebarPrefs(getSidebarPrefs(), { tabs: { tasks: false } }))
+    expect(live.has('dshws-tasks')).toBe(false)
+    setSidebarPrefs(mergeSidebarPrefs(getSidebarPrefs(), { tabs: { files: false } }))
+    expect(live.has('dsh-workspace:remote-files')).toBe(false)
+    const canOpen = f.registered[0]?.canOpen as (a: string) => boolean
+    expect(canOpen(sessionFileAddress('remote', '/srv/app/a.ts'))).toBe(true)
+    setSidebarPrefs(mergeSidebarPrefs(getSidebarPrefs(), { tabs: { viewer: false } }))
+    expect(canOpen(sessionFileAddress('remote', '/srv/app/a.ts'))).toBe(false)
+  })
+
+  it('会话顶部的「文件管理」「Git 仓库」跟随同一开关', async () => {
+    const live = new Set<string>()
+    const current = { getSnapshot: () => ({ key: 'remote' }), subscribe: () => () => undefined }
+    const ctx = {
+      get: (n: string) =>
+        n === 'uiSession'
+          ? { adapter: { current } }
+          : n === 'sessions'
+            ? { list: { getSnapshot: () => ({ byId: { remote: { cwd: 'C:\\ph\\app' } } }), subscribe: () => () => undefined } }
+            : undefined,
+      slots: {
+        inject: (_n: string, f: () => () => void) => f(),
+        register: (o: { id: string }) => {
+          live.add(o.id)
+          return () => live.delete(o.id)
+        }
+      }
+    }
+    const index = new RemoteIndex(async () => [ws], () => ctx.get('sessions') as never)
+    await index.refresh()
+    const off = registerConversationTabs(ctx as never, { t, api, index, openResource: () => undefined }, () => undefined)
+    expect(live.size).toBe(2)
+    setSidebarPrefs(mergeSidebarPrefs(getSidebarPrefs(), { tabs: { git: false } }))
+    expect([...live]).toEqual(['dsh-workspace-remote-files'])
+    setSidebarPrefs(mergeSidebarPrefs(getSidebarPrefs(), { tabs: { git: true, files: false } }))
+    expect([...live]).toEqual(['dsh-workspace-remote-git'])
+    off()
+    expect(live.size).toBe(0)
   })
 })
 

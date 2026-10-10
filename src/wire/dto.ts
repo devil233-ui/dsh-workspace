@@ -17,8 +17,11 @@ import type { RecentTerminal, TerminalView } from '../terminal/registry.js'
 import type { ListResult, ReadResult, RemoteEntry, RemoveResult, SearchResult } from '../sftp/remote-fs.js'
 
 import type { UpdateStatus, UploadView } from '../update/updater.js'
+import type { BetterSidebarStatus, BetterSidebarToggleOutput } from '../better-sidebar.js'
+import type { SidebarPrefs, SidebarPrefsPatch } from './sidebar-prefs.js'
 
 export type { RecentTerminal, TerminalView, ListResult, ReadResult, RemoteEntry, RemoveResult, SearchResult, UpdateStatus, UploadView }
+export type { BetterSidebarStatus, BetterSidebarToggleOutput, SidebarPrefs, SidebarPrefsPatch }
 
 /**
  * 认证输入。
@@ -193,6 +196,12 @@ export interface MethodIO {
   localRead: [{ path: string }, ReadResult]
   /** 本机任意路径只读（字节，base64，上限 8MB）。 */
   localReadData: [{ path: string }, { path: string; size: number; mtime: number; base64: string }]
+  /** 「侧边栏」管理页偏好的局部更新（只传要改的字段）。 */
+  setSidebarPrefs: [SidebarPrefsPatch, PrefsOutput]
+  /** dsh-better-sidebar 的安装 / 启用状态（宿主 pluginManager 不可用时 available=false）。 */
+  betterSidebarStatus: [Record<string, never>, BetterSidebarStatus]
+  /** 禁用 / 启用 dsh-better-sidebar（整个 profile 生效，界面先确认）。 */
+  betterSidebarSetEnabled: [{ enabled: boolean }, BetterSidebarToggleOutput]
 }
 
 export interface LocalListOutput {
@@ -256,4 +265,6 @@ export interface PrefsOutput {
   takeoverAddWorkspace: boolean
   /** 接管 DSH 自带的「文件」侧栏（默认开启）。 */
   takeoverFilesSidebar: boolean
+  /** 「侧边栏」管理页偏好（完整、已规范化）。 */
+  sidebar: SidebarPrefs
 }

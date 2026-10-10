@@ -29,6 +29,7 @@ import type { GitRepo } from './git/remote-git.js'
 import type { RemoteFs } from './sftp/remote-fs.js'
 import { toRemotePath } from './workspace/bindings.js'
 import { REMOTE_MARKER } from './agent/present-tool.js'
+import { BetterSidebarError, betterSidebarSetEnabled, betterSidebarStatus } from './better-sidebar.js'
 
 /** 远程（RemoteFs）与本地（LocalFs）共同的文件操作面。 */
 type FileOps = Pick<
@@ -641,12 +642,38 @@ export class WorkspaceGateway extends RemoteService {
     })
   }
 
+  setSidebarPrefs(input: In<'setSidebarPrefs'>): Out<'setSidebarPrefs'> {
+    return this.guard(() => this.prefsOutput(this.rt.prefs.setSidebar(input)))
+  }
+
+  /** dsh-better-sidebar 状态：只在用户打开「侧边栏」管理页时查询（宿主 pluginManager 可选，缺席返回 available=false）。 */
+  betterSidebarStatus(_: In<'betterSidebarStatus'>): Out<'betterSidebarStatus'> {
+    return this.guard(() => betterSidebarStatus(this.rt.host.pluginManager))
+  }
+
+  /** 禁用 / 启用 dsh-better-sidebar：仅由用户在管理页确认后触发（整个 profile 生效）。 */
+  betterSidebarSetEnabled(input: In<'betterSidebarSetEnabled'>): Out<'betterSidebarSetEnabled'> {
+    return this.guard(async () => {
+      try {
+        const out = await betterSidebarSetEnabled(this.rt.host.pluginManager, input.enabled)
+        const verb = input.enabled ? '启用' : '禁用'
+        if (out.application === 'failed') this.rt.log.warn('', 'config', `${verb} dsh-better-sidebar 失败：${out.error ?? ''}`)
+        else this.rt.log.info('', 'config', `已${verb} dsh-better-sidebar（${out.application}）。`)
+        return out
+      } catch (error) {
+        if (error instanceof BetterSidebarError) throw new RemoteError(ERROR_CODES.failed, error.message, {})
+        throw error
+      }
+    })
+  }
+
   private prefsOutput(prefs = this.rt.prefs.get()): MethodIO['getPrefs'][1] {
     return {
       ignore: prefs.ignore,
       defaultIgnore: [...DEFAULT_IGNORE],
       takeoverAddWorkspace: prefs.takeoverAddWorkspace,
-      takeoverFilesSidebar: prefs.takeoverFilesSidebar
+      takeoverFilesSidebar: prefs.takeoverFilesSidebar,
+      sidebar: prefs.sidebar
     }
   }
 

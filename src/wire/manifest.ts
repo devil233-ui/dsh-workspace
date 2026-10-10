@@ -6,6 +6,7 @@
 import { z } from 'zod'
 import { PACKAGE, buildDescriptors, type Codec, type MethodName } from './contract.js'
 import type { MethodIO } from './dto.js'
+import { ASSOC_MAX, ASSOC_MODES, ASSOC_VIEWERS, CUSTOM_CSS_MAX, LARGE_FILE_MB_MAX, LARGE_FILE_MB_MIN, RETIRED_SIDEBAR_TAB_KEYS, SESSION_ID_MAX, SIDEBAR_TAB_KEYS, SIDECHATS_MAX } from './sidebar-prefs.js'
 
 // 编译期保证 dto 的 MethodIO 与 contract 的 METHODS 一一对应，漏一个直接报错。
 type AssertSameKeys<A, B> = [Exclude<keyof A, B>, Exclude<B, keyof A>] extends [never, never]
@@ -163,6 +164,50 @@ const INPUTS: Record<MethodName, z.ZodType> = {
   // 本机只读：是否绝对、是否 UNC / 设备路径由 local-fs.ts 的 resolveReadablePath 按平台校验。
   localRead: z.object({ path: localAbsPath }),
   localReadData: z.object({ path: localAbsPath }),
+  setSidebarPrefs: sidebarPrefsPatch(),
+  betterSidebarStatus: empty,
+  betterSidebarSetEnabled: z.object({ enabled: z.boolean() }).strict(),
+}
+
+/** 「侧边栏」偏好的局部更新：严格模式，未知字段直接拒绝（防止浏览器把任意数据写进偏好文件）。 */
+function sidebarPrefsPatch() {
+  const assoc = z.object({ viewer: z.enum(ASSOC_VIEWERS), mode: z.enum(ASSOC_MODES).optional() }).strict()
+  // 已下线的标签键（RETIRED_SIDEBAR_TAB_KEYS）照收不报错，由 normalizeSidebarPrefs 丢弃：升级后仍开着的旧页面提交它时，同一次提交里的其他改动不会被整单拒绝。
+  const tabs = z.object(Object.fromEntries([...SIDEBAR_TAB_KEYS, ...RETIRED_SIDEBAR_TAB_KEYS].map((k) => [k, z.boolean().optional()]))).strict()
+  return z
+    .object({
+      tabs: tabs.optional(),
+      // null = 恢复默认表；扩展名合法性在 normalizeSidebarPrefs 里再过滤一次。
+      associations: z.record(z.string().min(1).max(32), assoc).nullable().optional(),
+      largeFileMB: z.number().int().min(LARGE_FILE_MB_MIN).max(LARGE_FILE_MB_MAX).optional(),
+      htmlNoSandbox: z.boolean().optional(),
+      openInSidebar: z.boolean().optional(),
+      tasksAutoOpen: z.boolean().optional(),
+      imeGuard: z.boolean().optional(),
+      customCss: z.string().max(CUSTOM_CSS_MAX).optional(),
+      autoRefresh: z.boolean().optional(),
+      remoteSshTerminal: z.boolean().optional(),
+      // 模板合法性（协议、禁用协议）在 normalizeSidebarPrefs → normalizeOpenWith 里再过滤一次。
+      openWith: z
+        .array(z.object({ name: z.string().trim().min(1).max(OPEN_WITH_NAME_MAX), template: z.string().trim().min(1).max(OPEN_URL_MAX) }).strict())
+        .max(OPEN_WITH_MAX)
+        .optional(),
+      // 侧边对话记录：整表替换（浏览器端合并好再写）；去重 / 排序 / 截断在 normalizeSidechats 里再做一次。
+      sidechats: z
+        .array(
+          z
+            .object({
+              parentId: z.string().min(1).max(SESSION_ID_MAX),
+              childId: z.string().min(1).max(SESSION_ID_MAX),
+              createdAt: z.number().nonnegative()
+            })
+            .strict()
+        )
+        .max(SIDECHATS_MAX)
+        .optional()
+    })
+    .strict()
+    .refine((v) => v.associations == null || Object.keys(v.associations).length <= ASSOC_MAX, `文件关联最多 ${ASSOC_MAX} 条`)
 }
 
 /** 远程 Git 各操作的输入校验（路径是否在仓库内由 RemoteGit 再校验一次）。 */

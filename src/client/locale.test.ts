@@ -28,7 +28,8 @@ function usedKeys(): Set<string> {
   const keys = new Set<string>()
   for (const file of sourceFiles(clientDir)) {
     const src = readFileSync(file, 'utf8')
-    for (const m of src.matchAll(/\b(?:t|raw)\(\s*['"]([A-Za-z][\w.]*)['"]/g)) keys.add(m[1] as string)
+    // 也认可选调用 t?.('a.b')（标题插槽等拿不到 t 时退化的写法）。
+    for (const m of src.matchAll(/\b(?:t|raw)(?:\?\.)?\(\s*['"]([A-Za-z][\w.]*)['"]/g)) keys.add(m[1] as string)
   }
   // 模板字符串拼出来的键无法静态提取，在此显式列出。
   for (const section of ['hosts', 'files', 'terminals', 'logs']) keys.add(`section.${section}`)

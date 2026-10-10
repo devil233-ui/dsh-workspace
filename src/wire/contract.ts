@@ -66,6 +66,9 @@ export const METHODS = [
   'presentedFile',
   'localRead',
   'localReadData',
+  'setSidebarPrefs',
+  'betterSidebarStatus',
+  'betterSidebarSetEnabled',
 ] as const
 
 /** 本机任意路径只读的线上主机 id（与宿主 local/local-fs.ts 的 LOCAL_ANY_ID 一致；浏览器 bundle 不能 import 那个文件）。 */

@@ -1,4 +1,4 @@
-﻿/*
+/*
  * @Description: 接管 DSH 自带的「文件」侧栏（kind files）—— 冲突检测、状态广播
  * @Author: YangHeng
  * @Date: 2026-09-30 17:30:00
@@ -79,6 +79,8 @@ export function manageFilesTakeover(opts: {
 }): { evaluate(): void; dispose(): void } {
   let active: (() => void) | undefined
   let evaluating = false
+  // dispose 之后仍可能有迟到的调用（注册表通知推迟的 setTimeout、偏好读取的 then）：一律忽略，否则会在撤销后重新注册。
+  let disposed = false
 
   const release = (): void => {
     active?.()
@@ -87,7 +89,7 @@ export function manageFilesTakeover(opts: {
 
   const evaluate = (): void => {
     // 自己注册时注册表会同步通知一次，这时不再重入。
-    if (evaluating || !opts.ready()) return
+    if (disposed || evaluating || !opts.ready()) return
     evaluating = true
     try {
       if (!opts.enabled()) {
@@ -131,6 +133,7 @@ export function manageFilesTakeover(opts: {
   return {
     evaluate,
     dispose() {
+      disposed = true
       offRegistry?.()
       release()
     }

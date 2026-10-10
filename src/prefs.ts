@@ -1,5 +1,5 @@
-﻿/*
- * @Description: 插件偏好设置（忽略规则、接管「添加工作区」、接管「文件」侧栏）
+/*
+ * @Description: 插件偏好设置（忽略规则、接管「添加工作区」、接管「文件」侧栏、「侧边栏」管理页）
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/prefs.ts
  */
@@ -8,6 +8,7 @@ import { renameWithRetry } from './fs-atomic.js'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { pluginRoot } from './paths.js'
+import { DEFAULT_SIDEBAR_PREFS, mergeSidebarPrefs, normalizeSidebarPrefs, type SidebarPrefs, type SidebarPrefsPatch } from './wire/sidebar-prefs.js'
 
 export interface Prefs {
   /** 用户追加的忽略规则（.gitignore 写法），叠加在内置默认规则之后。 */
@@ -22,9 +23,11 @@ export interface Prefs {
    * 其他插件（如 better-sidebar）已接管时不抢，只提示。
    */
   takeoverFilesSidebar: boolean
+  /** 「侧边栏」管理页的偏好（标签开关、文件关联、外观等，见 wire/sidebar-prefs.ts）。 */
+  sidebar: SidebarPrefs
 }
 
-const DEFAULTS: Prefs = { ignore: [], takeoverAddWorkspace: true, takeoverFilesSidebar: true }
+const DEFAULTS: Prefs = { ignore: [], takeoverAddWorkspace: true, takeoverFilesSidebar: true, sidebar: DEFAULT_SIDEBAR_PREFS }
 
 export function prefsFile(): string {
   return path.join(pluginRoot(), 'prefs.json')
@@ -32,6 +35,15 @@ export function prefsFile(): string {
 
 export class PrefsStore {
   private data: Prefs | undefined
+  private listeners = new Set<(prefs: Prefs) => void>()
+
+  /** 偏好保存后通知（宿主端功能按偏好即时注册 / 撤销，如 open_in_sidebar）。返回取消订阅。 */
+  subscribe(listener: (prefs: Prefs) => void): () => void {
+    this.listeners.add(listener)
+    return () => {
+      this.listeners.delete(listener)
+    }
+  }
 
   get(): Prefs {
     if (this.data !== undefined) return this.data
@@ -42,7 +54,8 @@ export class PrefsStore {
       this.data = {
         ignore: Array.isArray(parsed.ignore) ? parsed.ignore.filter((s): s is string => typeof s === 'string') : [],
         takeoverAddWorkspace: parsed.takeoverAddWorkspace !== false,
-        takeoverFilesSidebar: parsed.takeoverFilesSidebar !== false
+        takeoverFilesSidebar: parsed.takeoverFilesSidebar !== false,
+        sidebar: normalizeSidebarPrefs(parsed.sidebar)
       }
     } catch {
       // 偏好文件损坏不应影响主功能：退回默认值（下次保存会覆盖修复）。
@@ -64,6 +77,11 @@ export class PrefsStore {
     return this.save({ ...this.get(), takeoverFilesSidebar: enabled })
   }
 
+  setSidebar(patch: SidebarPrefsPatch): Prefs {
+    const current = this.get()
+    return this.save({ ...current, sidebar: mergeSidebarPrefs(current.sidebar, patch) })
+  }
+
   private save(next: Prefs): Prefs {
     const file = prefsFile()
     mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
@@ -71,6 +89,14 @@ export class PrefsStore {
     writeFileSync(tmp, JSON.stringify(next, null, 2), { encoding: 'utf8', mode: 0o600 })
     renameWithRetry(tmp, file)
     this.data = next
+    // 监听方出错不能影响保存结果（偏好已落盘）。
+    for (const listener of [...this.listeners]) {
+      try {
+        listener(next)
+      } catch {
+        /* 忽略 */
+      }
+    }
     return next
   }
 }

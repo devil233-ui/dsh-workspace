@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -14,6 +14,7 @@ import { WorkspaceGateway, toRemote } from './gateway.js'
 import { RemoteConflictError, RemoteExistsError } from './sftp/remote-fs.js'
 import { createRuntime, DEFAULT_CONFIG, type WorkspaceRuntime } from './runtime.js'
 import { HOST_MANIFEST } from './wire/manifest.js'
+import { prefsFile } from './prefs.js'
 import { buildDescriptors, ERROR_CODES, METHODS, makeCodec } from './wire/contract.js'
 import type { SaveHostInput } from './wire/dto.js'
 import type { ShellChannel } from './terminal/registry.js'
@@ -614,6 +615,87 @@ describe('文件接口', () => {
     // 首尾空白被去掉、空行被丢弃。
     expect(saved.ignore).toEqual(['*.log', 'tmp/'])
     expect((await gw.getPrefs({})).ignore).toEqual(['*.log', 'tmp/'])
+  })
+
+  it('侧边栏偏好：默认值、局部更新持久化、与旧偏好键互不影响', async () => {
+    const initial = await gw.getPrefs({})
+    expect(initial.sidebar.tabs.files).toBe(true)
+    expect(initial.sidebar.imeGuard).toBe(true)
+    expect(initial.sidebar.remoteSshTerminal).toBe(true)
+    const saved = await gw.setSidebarPrefs({ tabs: { sidechat: false }, largeFileMB: 50, customCss: 'a{color:red}', remoteSshTerminal: false })
+    expect(saved.sidebar.tabs.sidechat).toBe(false)
+    expect(saved.sidebar.tabs.git).toBe(true)
+    expect(saved.sidebar.remoteSshTerminal).toBe(false)
+    expect(saved.takeoverFilesSidebar).toBe(true)
+    await gw.setFilesTakeover({ enabled: false })
+    const rt2 = createRuntime(DEFAULT_CONFIG, { persistTerminals: false })
+    expect(rt2.prefs.get().sidebar.largeFileMB).toBe(50)
+    expect(rt2.prefs.get().sidebar.customCss).toBe('a{color:red}')
+    expect(rt2.prefs.get().takeoverFilesSidebar).toBe(false)
+    rt2.dispose()
+  })
+
+  it('已取消的底部 dock：prefs.json 残留的 tabs.dock 被安全忽略，其余偏好保留；下次保存后不再写出', async () => {
+    mkdirSync(path.dirname(prefsFile()), { recursive: true })
+    writeFileSync(
+      prefsFile(),
+      JSON.stringify({ ignore: ['*.log'], takeoverFilesSidebar: false, sidebar: { tabs: { dock: false, git: false }, largeFileMB: 33, customCss: 'b{}' } })
+    )
+    const rt2 = createRuntime(DEFAULT_CONFIG, { persistTerminals: false })
+    const p = rt2.prefs.get()
+    expect(p.ignore).toEqual(['*.log'])
+    expect(p.takeoverFilesSidebar).toBe(false)
+    expect(p.sidebar.tabs.git).toBe(false)
+    expect('dock' in p.sidebar.tabs).toBe(false)
+    expect(p.sidebar.largeFileMB).toBe(33)
+    expect(p.sidebar.customCss).toBe('b{}')
+    rt2.prefs.setSidebar({ imeGuard: false })
+    expect(JSON.parse(readFileSync(prefsFile(), 'utf8')).sidebar.tabs).not.toHaveProperty('dock')
+    rt2.dispose()
+  })
+
+  it('旧页面仍提交 tabs.dock：严格校验照收（不整单拒绝），规范化后丢弃，同次提交的其他字段生效', async () => {
+    const d = HOST_MANIFEST.invocations.find((x) => x.method === 'setSidebarPrefs') as {
+      parameters: Array<{ codec: { schema: { parse(v: unknown): unknown } } }>
+    }
+    const parsed = d.parameters[0]?.codec.schema.parse({ tabs: { dock: false, git: false }, largeFileMB: 40 })
+    const saved = await gw.setSidebarPrefs(parsed as never)
+    expect(saved.sidebar.tabs.git).toBe(false)
+    expect('dock' in saved.sidebar.tabs).toBe(false)
+    expect(saved.sidebar.largeFileMB).toBe(40)
+  })
+
+  it('侧边栏偏好的输入校验是严格的：未知字段、非法查看器、超范围阈值都拒绝', () => {
+    const d = HOST_MANIFEST.invocations.find((x) => x.method === 'setSidebarPrefs') as {
+      parameters: Array<{ codec: { schema: { parse(v: unknown): unknown } } }>
+    }
+    const codec = d.parameters[0]?.codec
+    expect(() => codec?.schema.parse({ tabs: { files: false }, associations: { log: { viewer: 'monaco', mode: 'edit' } } })).not.toThrow()
+    expect(() => codec?.schema.parse({ associations: null })).not.toThrow()
+    expect(() => codec?.schema.parse({ evil: 1 })).toThrow()
+    expect(() => codec?.schema.parse({ tabs: { bogus: true } })).toThrow()
+    expect(() => codec?.schema.parse({ associations: { log: { viewer: 'exe' } } })).toThrow()
+    expect(() => codec?.schema.parse({ largeFileMB: 0 })).toThrow()
+    const toggle = HOST_MANIFEST.invocations.find((x) => x.method === 'betterSidebarSetEnabled') as typeof d
+    expect(() => toggle.parameters[0]?.codec.schema.parse({ enabled: false, entryId: 'x' })).toThrow()
+  })
+
+  it('better-sidebar：pluginManager 缺席时状态为 unavailable、切换报 failed；存在时经它禁用', async () => {
+    expect((await gw.betterSidebarStatus({})).available).toBe(false)
+    await expectCode(gw.betterSidebarSetEnabled({ enabled: false }), ERROR_CODES.failed)
+    const rows = [{ entryId: 'bs', moduleName: 'dsh-better-sidebar', enabled: true, patchId: 'better-sidebar' }]
+    rt.host.pluginManager = {
+      installBundle: async () => ({}),
+      listPlugins: async () => rows,
+      setPluginEnabled: async (_id: string, enabled: boolean) => {
+        rows[0]!.enabled = enabled
+        return { application: 'applied' }
+      }
+    }
+    expect(await gw.betterSidebarStatus({})).toEqual({ available: true, installed: true, enabled: true, entryId: 'bs' })
+    const out = await gw.betterSidebarSetEnabled({ enabled: false })
+    expect(out.application).toBe('applied')
+    expect(out.status.enabled).toBe(false)
   })
 
   it('文件接口的输入校验：路径必须是绝对路径', () => {

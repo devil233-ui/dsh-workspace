@@ -501,6 +501,50 @@ export const CSS = `
 .dshws-about-kv dd .dshws-set-link { font-family: inherit; }
 .dshws-about-links { display: flex; flex-wrap: wrap; gap: 8px 20px; padding-top: 12px; border-top: 1px solid var(--dsw-alias-border-l2); }
 
+/* 「侧边栏」页签：沿用全局配置的卡片，补文件关联表、文本框、BS 横幅与操作结果条 */
+.dshws-set-note[data-tone="muted"] { color: var(--dsw-alias-label-dimmed); }
+.dshws-sbm .dshws-set-card { padding-bottom: 14px; }
+.dshws-sbm-banner { margin: 8px 0 4px; flex-wrap: wrap; }
+.dshws-sbm-impact { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; line-height: 1.6; }
+.dshws-sbm-result { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 10px; padding: 10px 12px; border-radius: 8px;
+  font-size: 12.5px; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-state-success-primary); }
+.dshws-sbm-result[data-tone="error"] { color: var(--dsw-alias-state-error-primary); }
+.dshws-sbm-result > span { flex: 1; min-width: 0; }
+.dshws-sbm-cardhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.dshws-sbm-cardhead > .dshws-section-title { margin-bottom: 0; }
+.dshws-sbm-assoc-tools { margin: 10px 0 8px; }
+.dshws-sbm-assoc-tools .dshws-input { width: 100%; max-width: 280px; height: 30px; }
+.dshws-sbm-assoc { max-height: 320px; overflow: auto; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; }
+.dshws-sbm-assoc-row { display: grid; grid-template-columns: minmax(80px, 1fr) minmax(0, 1.6fr) minmax(0, 1fr) 28px; gap: 8px; align-items: center; padding: 5px 10px; }
+.dshws-sbm-assoc > .dshws-sbm-assoc-row + .dshws-sbm-assoc-row { border-top: 1px solid var(--dsw-alias-border-l2); }
+.dshws-sbm-assoc-head { position: sticky; top: 0; z-index: 1; background: var(--dsw-alias-bg-layer-1); font-size: 12px; color: var(--dsw-alias-label-tertiary); }
+.dshws-sbm-assoc-row .dshws-select, .dshws-sbm-assoc-row .dshws-input { height: 28px; font-size: 12.5px; min-width: 0; width: 100%; }
+.dshws-sbm-ext { font-family: var(--dsw-font-family-mono, monospace); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dshws-sbm-empty { padding: 10px; }
+.dshws-sbm-assoc-add { margin-top: 8px; padding: 0; grid-template-columns: minmax(80px, 1fr) minmax(0, 1.6fr) minmax(0, 1fr) auto; }
+.dshws-sbm-textarea { width: 100%; box-sizing: border-box; margin-top: 8px; font-size: 12.5px; }
+.dshws-sbm-actions { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-top: 8px; }
+.dshws-sbm-defaults { flex: 1; min-width: 0; font-size: 12px; color: var(--dsw-alias-label-tertiary); }
+.dshws-sbm-defaults summary { cursor: pointer; }
+.dshws-sbm-defaults code { display: block; margin-top: 6px; white-space: pre-wrap; word-break: break-word; }
+.dshws-sbm-mb { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--dsw-alias-label-secondary); }
+.dshws-sbm-mb .dshws-input { width: 84px; height: 30px; }
+.dshws-sbm-css { padding-top: 12px; border-top: 1px solid var(--dsw-alias-border-l2); }
+.dshws-sbm-ow { padding-top: 12px; border-top: 1px solid var(--dsw-alias-border-l2); }
+.dshws-sbm-ow-row { display: grid; grid-template-columns: minmax(80px, 0.8fr) minmax(0, 2fr) 28px; gap: 8px; align-items: center; padding: 4px 0; }
+.dshws-sbm-ow-name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dshws-sbm-ow-tpl { font-size: 12px; color: var(--dsw-alias-label-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dshws-sbm-ow-add { grid-template-columns: minmax(80px, 0.8fr) minmax(0, 2fr) auto; margin-top: 6px; }
+.dshws-sbm-ow-add .dshws-input { height: 28px; font-size: 12.5px; min-width: 0; width: 100%; }
+/* 窄屏：关联表每行两列（扩展名 + 删除 / 查看器 + 模式），添加行同理；与 useNarrow() 隐藏表头配合 */
+@media (max-width: 640px) {
+  .dshws-sbm-ow-add { grid-template-columns: minmax(0, 1fr); }
+  .dshws-sbm-assoc-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); row-gap: 6px; }
+  .dshws-sbm-assoc-row > .dshws-icon-btn { grid-column: 2; grid-row: 1; justify-self: end; }
+  .dshws-sbm-assoc-add > button { grid-column: 1 / -1; }
+  .dshws-sbm .dshws-set-row { gap: 12px; }
+}
+
 /* 添加工作区弹窗：左侧位置栏（本机快捷目录 / 盘符 / 远程主机）+ 右侧目录浏览。内部一律 min-width: 0，避免长路径撑出弹窗 */
 .dshws-picker.dshws-picker { width: min(880px, 100%); max-height: 100%; gap: 16px; }
 .dshws-pk { display: grid; grid-template-columns: 208px minmax(0, 1fr); height: min(400px, calc(100dvh - 330px)); min-height: 240px;
