@@ -161,6 +161,8 @@ export class GitRepo {
       scope,
       '--decorate=full',
       '--topo-order',
+      // -z：记录之间用 NUL 分隔（提交说明里可能含任意字符，见 LOG_FORMAT 的说明）。
+      '-z',
       `--skip=${Math.max(0, skip | 0)}`,
       '-n',
       String(Math.min(1000, Math.max(1, limit | 0))),

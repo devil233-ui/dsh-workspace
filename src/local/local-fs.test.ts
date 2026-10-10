@@ -114,6 +114,10 @@ describe.skipIf(!hasGit)('LocalGit', () => {
     const hash = await git.commit('first "quoted" message')
     expect(hash).toMatch(/^[0-9a-f]{7,}$/)
     expect((await git.log(0, 10))[0]?.subject).toBe('first "quoted" message')
+    // 真实 git 走一遍 -z + %B：多行正文、正文里的分隔控制字符都不能让字段错位。
+    g('commit', '-q', '--allow-empty', '-m', 'feat: 多行说明', '-m', '- 第一项 `a|b`\n- 第二项 \x1f \x1e <b>x</b>')
+    expect((await git.log(0, 10))[0]).toMatchObject({ subject: 'feat: 多行说明', body: '- 第一项 `a|b`\n- 第二项 \x1f \x1e <b>x</b>' })
+    expect((await git.log(0, 10))[1]?.subject).toBe('first "quoted" message')
     const info = await git.branchInfo('refs/heads/main')
     expect(info.mode).toBe('worktree')
     // 新建分支并在临时索引里编辑、提交（不碰工作目录）

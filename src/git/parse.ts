@@ -87,25 +87,51 @@ export interface GitCommit {
   /** 分支 / 标签装饰，如 ["HEAD -> main", "origin/main", "tag: v1"]。 */
   refs: string[]
   subject: string
+  /** 提交说明正文（标题之后空一行起的部分，原样保留换行）；没有正文为 ''。 */
+  body: string
 }
 
-/** git log 的格式：字段用 \x1f，记录用 \x1e。 */
-export const LOG_FORMAT = '%H%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s%x1e'
+/**
+ * git log 的格式（配合 `-z`：记录之间用 NUL 分隔）。字段用 \x1f，完整说明 %B 放在最后一个字段。
+ * 为什么不用 %s / %b 各占一个字段、也不用 \x1e 做记录分隔：提交说明是用户随意写的文本，里面可以出现 \x1f / \x1e，
+ * 放在中间会让后面的字段整体错位；放在最后并且只按前 5 个 \x1f 切分，正文里再出现分隔符也只是正文的一部分。
+ * NUL 不可能出现在 git 输出的说明里（git 按 C 字符串处理提交说明），作为记录分隔是安全的。
+ */
+export const LOG_FORMAT = '%H%x1f%P%x1f%an%x1f%at%x1f%D%x1f%B'
+
+/** 单个提交正文的上限：防止个别超长说明（如粘贴整份日志）让一页历史的响应过大。 */
+const BODY_MAX = 20_000
+
+/** 完整说明 → 标题 + 正文。标题规则与 git 的 %s 一致：第一段（到第一个空行）的多行用空格连接。 */
+export function splitMessage(message: string): { subject: string; body: string } {
+  const text = message.replace(/\r\n?/g, '\n').replace(/^\s*\n/, '')
+  const m = /\n[ \t]*\n/.exec(text)
+  const head = m === null ? text : text.slice(0, m.index)
+  const rest = m === null ? '' : text.slice(m.index + m[0].length)
+  const subject = head.split('\n').map((l) => l.trim()).filter(Boolean).join(' ')
+  let body = rest.replace(/^(?:[ \t]*\n)+/, '').trimEnd()
+  if (body.length > BODY_MAX) body = `${body.slice(0, BODY_MAX)}\n\n…`
+  return { subject, body }
+}
 
 export function parseLog(out: string): GitCommit[] {
   const commits: GitCommit[] = []
-  for (const record of out.split('\x1e')) {
+  for (const record of out.split('\0')) {
     const trimmed = record.replace(/^\n+/, '')
     if (trimmed === '') continue
-    const [hash, parents, author, at, refs, subject] = trimmed.split('\x1f')
+    const parts = trimmed.split('\x1f')
+    const [hash, parents, author, at, refs] = parts
     if (hash === undefined || !/^[0-9a-f]{7,64}$/.test(hash)) continue
+    // 说明里可能含 \x1f：前 5 个之后的全部拼回去。
+    const { subject, body } = splitMessage(parts.slice(5).join('\x1f'))
     commits.push({
       hash,
       parents: (parents ?? '').split(' ').filter(Boolean),
       author: author ?? '',
       date: Number(at ?? 0) * 1000,
       refs: (refs ?? '').split(', ').map((r) => r.trim()).filter(Boolean),
-      subject: subject ?? ''
+      subject,
+      body
     })
   }
   return commits

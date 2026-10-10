@@ -31,6 +31,8 @@ import { useLocalSupport } from './host-support.js'
 import { AiChangesView } from './AiChangesView.js'
 import { refreshAiChanges, repoRelative, turnCount, useAiChanges, type AiScope } from './ai-changes.js'
 import { redactSecrets, type RedactResult } from './redact.js'
+import { CommitPopover, POPOVER_TRIGGER_ATTR, useHoverIntent } from './CommitPopover.js'
+import { useTabStrip } from '../tabstrip.js'
 import type { AiChangeBase, AiChangedFile } from '../../wire/ai-changes.js'
 
 /** 未查看其他分支时的页签：文件 / 改动 / 历史，外加「AI 改动」（本会话模型改过的文件）。 */
@@ -100,6 +102,8 @@ export function GitTab(props: SidebarBodyProps) {
   const [viewing, setViewing] = useState<GitBranch | null>(null)
   const [viewTab, setViewTab] = useState<ViewTab>('files')
   const [viewFile, setViewFile] = useState<{ path: string; text?: string; binary?: boolean; tooLarge?: boolean; error?: string } | null>(null)
+  // 顶部页签栏：两条（工作目录 / 查看分支）互斥渲染，共用一个回调 ref。
+  const tabStripRef = useTabStrip<HTMLDivElement>(viewing === null ? `w:${view}` : `b:${viewTab}`)
   /** 所查看分支的编辑方式（每次进入 / 写操作后重新取；宿主写操作前还会再判断一次）。 */
   const [binfo, setBinfo] = useState<BranchInfo | null>(null)
   /** 分支内容变化计数：保存 / 撤销 / 提交后递增，文件树与改动列表据此重载。 */
@@ -681,7 +685,7 @@ export function GitTab(props: SidebarBodyProps) {
               }}
             />
           ) : null}
-          <div className="dshws-git-tabs" role="tablist">
+          <div ref={tabStripRef} className="dshws-git-tabs dshws-tabstrip" role="tablist">
             {viewTabs(binfo).map((v) => (
               <button key={v} type="button" role="tab" data-active={viewTab === v} onClick={() => setViewTab(v)}>
                 {t(`git.view.${v}`)}
@@ -695,7 +699,7 @@ export function GitTab(props: SidebarBodyProps) {
       ) : null}
       {status !== null && viewing === null ? (
         // 不是 git 仓库时只有「AI 改动」一页（文件直接打开，不做 diff）。
-        <div className="dshws-git-tabs" role="tablist">
+        <div ref={tabStripRef} className="dshws-git-tabs dshws-tabstrip" role="tablist">
           {(repo !== null ? (['files', 'changes', 'history', 'ai'] as const) : (['ai'] as const)).map((v) => (
             <button key={v} type="button" role="tab" data-active={repo === null || view === v} onClick={() => setView(v)}>
               {t(`git.view.${v}`)}
@@ -1613,6 +1617,17 @@ function HistoryView(props: HistoryProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [open, setOpen] = useState<{ hash: string; files?: GitChangedFile[]; error?: string } | null>(null)
+  // 「渲染 / 原文」放在列表级：逐个悬停查看提交时保持用户上次的选择，不必每个浮窗都重新切。
+  const [rawMessage, setRawMessage] = useState(false)
+  // 提交说明浮窗：同一时间只显示一个（key = hash）；行元素按 hash 记下，用来定位浮窗。
+  const [popHash, intent] = useHoverIntent<string>()
+  const rowEls = useRef(new Map<string, HTMLElement>())
+  const popCommit = popHash === null ? undefined : commits.find((c) => c.hash === popHash)
+  const popAnchor = popHash === null ? undefined : rowEls.current.get(popHash)
+  // 列表重载后原来那一行不在了：关掉浮窗，免得下一次同 hash 出现时直接冒出来。
+  useEffect(() => {
+    if (popHash !== null && popCommit === undefined) intent.close()
+  }, [popHash, popCommit, intent])
 
   const loadMore = useCallback(
     async (reset: boolean) => {
@@ -1660,7 +1675,29 @@ function HistoryView(props: HistoryProps) {
       {commits.length === 0 && !loading && error === null ? <div className="dshws-side-note">{t('git.noCommits')}</div> : null}
       {commits.map((c, i) => (
         <div key={c.hash}>
-          <button type="button" className="dshws-git-commit-row" data-open={open?.hash === c.hash} onClick={() => void toggle(c)} title={`${c.hash}\n${c.author} · ${new Date(c.date).toLocaleString()}`}>
+          {/* 不再用 title：原生提示会和说明浮窗叠在一起。悬停只认鼠标 / 笔（触屏点按会合成 hover，交给「说明」按钮）；
+              聚焦只认 :focus-visible（键盘），避免鼠标点击展开时也触发。 */}
+          <button
+            type="button"
+            className="dshws-git-commit-row"
+            data-open={open?.hash === c.hash}
+            aria-describedby={popHash === c.hash ? `dshws-git-pop-${c.hash}` : undefined}
+            ref={(el) => {
+              if (el !== null) rowEls.current.set(c.hash, el)
+              else rowEls.current.delete(c.hash)
+            }}
+            onClick={() => void toggle(c)}
+            onPointerEnter={(e) => {
+              if (e.pointerType !== 'touch') intent.enter(c.hash)
+            }}
+            onPointerLeave={(e) => {
+              if (e.pointerType !== 'touch') intent.leave()
+            }}
+            onFocus={(e) => {
+              if (e.currentTarget.matches(':focus-visible')) intent.enter(c.hash)
+            }}
+            onBlur={() => intent.leave()}
+          >
             <GraphCell row={rows[i] as GraphRow} width={width} merge={c.parents.length > 1} />
             <span className="dshws-git-subject">
               {c.refs.map((r) => {
@@ -1688,6 +1725,17 @@ function HistoryView(props: HistoryProps) {
                 <span>{c.author}</span>
                 <span>{new Date(c.date).toLocaleString()}</span>
                 {c.parents.length > 1 ? <span className="dshws-pill">{t('git.mergeVsFirst')}</span> : null}
+                {/* 触屏 / 窄屏没有悬停：用这个按钮点开同一个浮窗（样式里只在 hover: none 或 ≤640px 时显示）。
+                    选按钮而不选长按：长按在手机上会和系统的文字选择 / 菜单抢手势，按钮可发现性也更好。 */}
+                <button
+                  type="button"
+                  className="dshws-link-btn dshws-git-msg-btn"
+                  {...{ [POPOVER_TRIGGER_ATTR]: '' }}
+                  aria-expanded={popHash === c.hash}
+                  onClick={() => (popHash === c.hash && intent.pinned() ? intent.close() : intent.open(c.hash))}
+                >
+                  {t('git.msg.show')}
+                </button>
               </div>
               {open.error !== undefined ? <div className="dshws-tree-note" data-tone="error">{open.error}</div> : null}
               {open.files === undefined && open.error === undefined ? <div className="dshws-tree-note">{t('files.loading')}</div> : null}
@@ -1720,6 +1768,9 @@ function HistoryView(props: HistoryProps) {
         <button type="button" className="dshws-link-btn dshws-git-more" disabled={loading} onClick={() => void loadMore(false)}>
           {loading ? t('files.loading') : t('git.loadMore')}
         </button>
+      ) : null}
+      {popCommit !== undefined && popAnchor !== undefined ? (
+        <CommitPopover key={popCommit.hash} t={t} commit={popCommit} anchor={popAnchor} intent={intent} raw={rawMessage} onRaw={setRawMessage} />
       ) : null}
     </div>
   )

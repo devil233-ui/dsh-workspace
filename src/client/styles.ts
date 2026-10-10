@@ -57,6 +57,14 @@ export const CSS = `
   border-radius: 9px; font-size: 11px; line-height: 18px; text-align: center;
   background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-secondary);
 }
+/*
+ * 通用横向页签栏（配合 src/client/tabstrip.ts 的 useTabStrip）：右侧栏被拖窄时，页签原本会被 flex 压缩、
+ * 文字逐字折行成竖排。改为页签与角标都不换行、不压缩，放不下时整条横向滚动（滚动条隐藏，滚轮 / 触控板可滑）。
+ */
+.dshws-tabstrip { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.dshws-tabstrip::-webkit-scrollbar { display: none; }
+.dshws-tabstrip > [role="tab"] { flex-shrink: 0; white-space: nowrap; }
+.dshws-tabstrip > [role="tab"] .dshws-count { flex-shrink: 0; white-space: nowrap; }
 
 /* 终端区域 */
 .dshws-terms { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
@@ -114,8 +122,9 @@ export const CSS = `
 .dshws-side-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; flex-shrink: 0; border-bottom: 1px solid var(--dsw-alias-border-l2); }
 .dshws-side-title { flex: 1; min-width: 0; font-weight: 500; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dshws-side-path { flex-shrink: 0; padding: 2px 10px 4px; font-size: 11px; color: var(--dsw-alias-label-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dshws-side-seg { display: inline-flex; border: 1px solid var(--dsw-alias-border-l3); border-radius: 6px; overflow: hidden; }
-.dshws-side-seg button { border: 0; background: transparent; padding: 2px 8px; font-size: 12px; cursor: pointer; color: var(--dsw-alias-label-secondary); }
+/* flex-shrink: 0 + nowrap：分段按钮放在标题行里，侧栏变窄时不能被压缩成竖排（让标题去省略） */
+.dshws-side-seg { display: inline-flex; flex-shrink: 0; border: 1px solid var(--dsw-alias-border-l3); border-radius: 6px; overflow: hidden; }
+.dshws-side-seg button { white-space: nowrap; border: 0; background: transparent; padding: 2px 8px; font-size: 12px; cursor: pointer; color: var(--dsw-alias-label-secondary); }
 .dshws-side-seg button[data-active="true"] { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
 /* 单个开关按钮（展开全部 / 缩略图）：外观与分段按钮一致，按下态高亮 */
 .dshws-side-toggle, .dshws-code-toggle {
@@ -526,6 +535,49 @@ export const CSS = `
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 12px 6px calc(var(--rail, 14px) + 14px);
   font-size: 11.5px; color: var(--dsw-alias-label-tertiary);
 }
+/*
+ * 提交说明浮窗：挂在 body 上 fixed 定位（见 CommitPopover.tsx）。z-index 高于侧栏里的下拉（2000），
+ * 低于右键菜单（3000）—— 浮窗开着时右键别处，菜单应盖在上面。颜色全走主题变量，深浅色自动跟随。
+ */
+.dshws-git-pop {
+  position: fixed; z-index: 2950; width: max-content; max-width: min(420px, calc(100vw - 16px)); min-width: 220px; max-height: 60vh;
+  overflow: auto; overscroll-behavior: contain; box-sizing: border-box; padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l2); border-radius: 10px; background: var(--dsw-alias-bg-layer-2);
+  box-shadow: var(--dsw-elevation-prominent, 0 10px 30px rgba(0, 0, 0, .16)); animation: dshws-float-in .12s ease-out;
+  font-size: 12px; color: var(--dsw-alias-label-primary); user-select: text; text-align: left;
+}
+/* 可换行：标题很长时「渲染 / 原文」整体换到下一行，而不是把标题挤成一两个字一行 */
+.dshws-git-pop-head { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 4px 10px; }
+.dshws-git-pop-title { flex: 1 1 160px; min-width: 0; font-size: 13px; font-weight: 600; line-height: 1.5; word-break: break-word; }
+.dshws-git-pop-head .dshws-side-seg { margin-top: 1px; }
+.dshws-git-pop-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin-top: 4px; font-size: 11.5px; color: var(--dsw-alias-label-tertiary); }
+.dshws-git-pop-hash {
+  /* 描边而非只靠底色：浅色主题下 layer-3 与浮窗底色几乎一样，看不出是可点的 */
+  border: 1px solid var(--dsw-alias-border-l2); padding: 0 5px; border-radius: 4px; cursor: pointer; font-size: 11px; line-height: 16px;
+  color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-3);
+}
+.dshws-git-pop-hash:hover { color: var(--dsw-alias-state-business-primary); }
+.dshws-git-pop-body {
+  margin: 8px 0 0; padding-top: 8px; border-top: 1px solid var(--dsw-alias-border-l2);
+  font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-secondary); word-break: break-word; overflow-wrap: anywhere;
+}
+.dshws-git-pop-body[data-raw="true"] { font-family: var(--dsw-font-family-mono, ui-monospace, Consolas, monospace); font-size: 11.5px; white-space: pre-wrap; }
+/* 「说明」按钮只给没有悬停的设备 / 窄屏用（断点与 narrow.ts 的 NARROW_MAX_WIDTH 一致） */
+.dshws-git-msg-btn { display: none; margin-left: auto; }
+@media (hover: none), (max-width: 640px) { .dshws-git-msg-btn { display: inline-flex; } }
+.dshws-git-md > :first-child { margin-top: 0; }
+.dshws-git-md > :last-child { margin-bottom: 0; }
+.dshws-git-md p, .dshws-git-md ul, .dshws-git-md ol, .dshws-git-md pre, .dshws-git-md blockquote, .dshws-git-md table { margin: 0 0 6px; }
+.dshws-git-md ul, .dshws-git-md ol { padding-left: 18px; }
+.dshws-git-md h1, .dshws-git-md h2, .dshws-git-md h3, .dshws-git-md h4, .dshws-git-md h5, .dshws-git-md h6 { margin: 8px 0 4px; font-size: 12.5px; font-weight: 600; color: var(--dsw-alias-label-primary); }
+.dshws-git-md a { color: var(--dsw-alias-state-business-primary); }
+.dshws-git-md code { font-family: var(--dsw-font-family-mono, ui-monospace, Consolas, monospace); font-size: 11px; padding: 0 4px; border-radius: 4px; background: var(--dsw-alias-bg-layer-3); }
+.dshws-git-md pre { padding: 6px 8px; border-radius: 6px; background: var(--dsw-alias-bg-layer-3); overflow-x: auto; }
+.dshws-git-md pre code { padding: 0; background: none; }
+.dshws-git-md blockquote { padding-left: 8px; border-left: 3px solid var(--dsw-alias-border-l3); color: var(--dsw-alias-label-tertiary); }
+.dshws-git-md table { border-collapse: collapse; display: block; overflow-x: auto; }
+.dshws-git-md th, .dshws-git-md td { border: 1px solid var(--dsw-alias-border-l2); padding: 2px 6px; }
+.dshws-git-md hr { border: 0; border-top: 1px solid var(--dsw-alias-border-l2); }
 
 /* 横幅（查看分支 / 只读说明 / 冲突） */
 .dshws-side-banner {

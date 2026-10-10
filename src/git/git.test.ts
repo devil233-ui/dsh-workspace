@@ -4,7 +4,7 @@
  * @FilePath: /dsh-workspace/src/git/git.test.ts
  */
 import { describe, expect, it } from 'vitest'
-import { isViewableRef, parseBranches, parseLog, parseLsTree, parseNameStatus, parseStatusV2, parseWorktrees } from './parse.js'
+import { isViewableRef, parseBranches, parseLog, parseLsTree, parseNameStatus, parseStatusV2, parseWorktrees, splitMessage } from './parse.js'
 import { graphWidth, layoutGraph } from './graph.js'
 
 describe('parseStatusV2', () => {
@@ -42,7 +42,8 @@ describe('parseStatusV2', () => {
 
 describe('parseLog / parseBranches / parseNameStatus', () => {
   it('log：父提交、装饰、带分隔字符的标题', () => {
-    const out = `aaaaaaa1\x1fbbbbbbb2 ccccccc3\x1f张三\x1f1700000000\x1fHEAD -> main, origin/main, tag: v1\x1fMerge: 合并 a|b\x1e\nbbbbbbb2\x1f\x1fli\x1f1600000000\x1f\x1finit\x1e`
+    // git log -z：记录之间 NUL 分隔，%B 末尾带换行。
+    const out = `aaaaaaa1\x1fbbbbbbb2 ccccccc3\x1f张三\x1f1700000000\x1fHEAD -> main, origin/main, tag: v1\x1fMerge: 合并 a|b\n\0bbbbbbb2\x1f\x1fli\x1f1600000000\x1f\x1finit\n`
     const log = parseLog(out)
     expect(log[0]).toEqual({
       hash: 'aaaaaaa1',
@@ -50,9 +51,32 @@ describe('parseLog / parseBranches / parseNameStatus', () => {
       author: '张三',
       date: 1700000000000,
       refs: ['HEAD -> main', 'origin/main', 'tag: v1'],
-      subject: 'Merge: 合并 a|b'
+      subject: 'Merge: 合并 a|b',
+      body: ''
     })
-    expect(log[1]?.parents).toEqual([])
+    expect(log[1]).toMatchObject({ parents: [], subject: 'init', body: '' })
+  })
+
+  it('log：多行正文、正文里含字段 / 记录分隔符与特殊字符都不错位', () => {
+    const body = '- 第一项 `code`\n- 第二项 \x1f 竖线 | 与 \x1e 记录符\n\n<script>alert(1)</script>\n\n  缩进行保留'
+    const out = [
+      `ccccccc1\x1fddddddd2\x1fa\x1f1700000000\x1f\x1ffeat: 标题 "引号" 'single' $HOME\n\n${body}\n`,
+      `ddddddd2\x1f\x1fb\x1f1600000000\x1f\x1f第一段\n续行也属于标题\r\n\r\n正文 CRLF\r\n第二行\r\n`,
+      // 标题后面多个空行：正文从第一个非空行开始
+      `eeeeeee3\x1f\x1fc\x1f1500000000\x1ftag: refs/tags/v2\x1fonly subject\n\n\n\n`
+    ].join('\0')
+    const log = parseLog(out)
+    expect(log).toHaveLength(3)
+    expect(log[0]).toMatchObject({ hash: 'ccccccc1', parents: ['ddddddd2'], subject: `feat: 标题 "引号" 'single' $HOME`, body })
+    expect(log[1]).toMatchObject({ subject: '第一段 续行也属于标题', body: '正文 CRLF\n第二行' })
+    expect(log[2]).toMatchObject({ refs: ['tag: refs/tags/v2'], subject: 'only subject', body: '' })
+  })
+
+  it('splitMessage：前导空行、超长正文截断', () => {
+    expect(splitMessage('\n\n  title  \n\nbody')).toEqual({ subject: 'title', body: 'body' })
+    const long = splitMessage(`t\n\n${'x'.repeat(30_000)}`)
+    expect(long.body.length).toBeLessThan(20_010)
+    expect(long.body.endsWith('…')).toBe(true)
   })
 
   it('for-each-ref：本地 / 远程、当前分支，忽略 origin/HEAD', () => {
