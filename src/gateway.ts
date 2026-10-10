@@ -30,6 +30,8 @@ import type { RemoteFs } from './sftp/remote-fs.js'
 import { toRemotePath } from './workspace/bindings.js'
 import { REMOTE_MARKER } from './agent/present-tool.js'
 import { BetterSidebarError, betterSidebarSetEnabled, betterSidebarStatus } from './better-sidebar.js'
+import { isAllowedExternalUrl } from './wire/open-with.js'
+import { openExternal } from './open-external.js'
 
 /** 远程（RemoteFs）与本地（LocalFs）共同的文件操作面。 */
 type FileOps = Pick<
@@ -612,6 +614,40 @@ export class WorkspaceGateway extends RemoteService {
 
   sftpSearch(input: In<'sftpSearch'>): Out<'sftpSearch'> {
     return this.guard(() => this.fs(input.hostId).search(input.hostId, input.root, input.query))
+  }
+
+  /**
+   * 文件树自动刷新：批量取目录 mtime。单个目录失败（被删、无权限、本机越出工作区）只返回 null，不让整批失败。
+   * 非目录同样返回 null —— 浏览器据此把它当作「已不存在的目录」重载其父目录。
+   */
+  sftpDirStamps(input: In<'sftpDirStamps'>): Out<'sftpDirStamps'> {
+    return this.guard(async () => {
+      const fs = this.fs(input.hostId)
+      const stamps: Record<string, number | null> = {}
+      await Promise.all(
+        [...new Set(input.paths)].map(async (p) => {
+          try {
+            const s = await fs.statPath(input.hostId, p)
+            stamps[p] = s !== undefined && s.type === 'dir' ? Math.floor(s.mtimeMs) : null
+          } catch {
+            stamps[p] = null
+          }
+        })
+      )
+      return { stamps }
+    })
+  }
+
+  /** 「打开方式」：协议白名单 = 内置编辑器 + 用户保存的模板协议（不信任浏览器传来的 URL）。 */
+  openExternalUrl(input: In<'openExternalUrl'>): Out<'openExternalUrl'> {
+    return this.guard(async () => {
+      if (!isAllowedExternalUrl(input.url, this.rt.prefs.get().sidebar.openWith)) {
+        throw new RemoteError(ERROR_CODES.failed, '不允许打开该地址（协议不在白名单内，可在「侧边栏」页的「打开方式」里添加模板）。', {})
+      }
+      await openExternal(input.url)
+      this.rt.log.info('', 'config', `已打开外部地址：${input.url.slice(0, 200)}`)
+      return { ok: true as const }
+    })
   }
 
   getPrefs(_: In<'getPrefs'>): Out<'getPrefs'> {

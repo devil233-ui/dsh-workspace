@@ -725,4 +725,27 @@ describe('本地工作区（hostId = local:<会话 id>）', () => {
     expect(status.isRepo).toBe(false)
     rmSync(ws, { recursive: true, force: true })
   })
+
+  it('sftpDirStamps：目录返回 mtime，文件 / 不存在 / 工作区外返回 null，单项失败不影响整批', async () => {
+    const ws = mkdtempSync(path.join(tmpdir(), 'dshws-gw-stamps-'))
+    mkdirSync(path.join(ws, 'sub'))
+    writeFileSync(path.join(ws, 'a.txt'), 'x')
+    rt.host.sessions = { get: (id) => (id === 's1' ? { header: { cwd: ws } } : undefined) }
+    const lp = (p: string): string => (process.platform === 'win32' ? `/${p.replace(/\\/g, '/')}` : p)
+    const root = lp(realpathSync(ws))
+    const outside = lp(realpathSync(tmpdir()))
+    const { stamps } = await gw.sftpDirStamps({ hostId: 'local:s1', paths: [root, `${root}/sub`, `${root}/a.txt`, `${root}/gone`, outside] })
+    expect(typeof stamps[root]).toBe('number')
+    expect(typeof stamps[`${root}/sub`]).toBe('number')
+    expect(stamps[`${root}/a.txt`]).toBeNull()
+    expect(stamps[`${root}/gone`]).toBeNull()
+    expect(stamps[outside]).toBeNull()
+    rmSync(ws, { recursive: true, force: true })
+  })
+
+  it('openExternalUrl：协议不在白名单（内置 + 用户模板）时拒绝，不会启动任何程序', async () => {
+    await expectCode(gw.openExternalUrl({ url: 'file:///C:/Windows/System32/calc.exe' }), ERROR_CODES.failed)
+    await expectCode(gw.openExternalUrl({ url: 'ms-msdt:/id' }), ERROR_CODES.failed)
+    await expectCode(gw.openExternalUrl({ url: 'myapp://open?x=1' }), ERROR_CODES.failed)
+  })
 })

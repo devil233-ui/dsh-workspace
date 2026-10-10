@@ -319,6 +319,49 @@ export const CSS = `
 .dshws-row-dim { font-size: 11px; color: var(--dsw-alias-label-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dshws-side-tree { padding: 4px 0 12px; }
 
+/* 文件树增强（方案 3.4）：搜索框、多选条、拖放上传、Git 状态装饰 */
+.dshws-tree-search {
+  display: flex; align-items: center; gap: 6px; flex-shrink: 0; height: 34px; padding: 0 6px 0 10px;
+  border-bottom: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-tertiary);
+}
+.dshws-tree-search-input {
+  flex: 1; min-width: 0; height: 26px; padding: 0 4px; border: 0; outline: none; background: transparent;
+  font-size: 13px; color: var(--dsw-alias-label-primary);
+}
+.dshws-tree-search-input::placeholder { color: var(--dsw-alias-label-tertiary); }
+.dshws-hit .dshws-row-dim { margin-left: 2px; flex-shrink: 1; }
+.dshws-tree-selbar { display: flex; align-items: center; gap: 8px; color: var(--dsw-alias-label-secondary); }
+.dshws-tree-selbar > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dshws-linkbtn {
+  flex-shrink: 0; padding: 0; border: 0; background: transparent; cursor: pointer;
+  font-size: 11px; color: var(--dsw-alias-state-business-primary);
+}
+.dshws-linkbtn:hover { text-decoration: underline; }
+.dshws-tree-drop { position: relative; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.dshws-side[data-drop="true"] .dshws-tree-drop { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-business-primary) 55%, transparent); }
+.dshws-row[data-drop="true"] { background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 14%, transparent); box-shadow: inset 0 0 0 1px var(--dsw-alias-state-business-primary); }
+.dshws-drop-hint {
+  position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); max-width: calc(100% - 24px); pointer-events: none;
+  padding: 4px 10px; border-radius: 12px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: #fff; background: var(--dsw-alias-state-business-primary); box-shadow: 0 4px 12px rgba(0, 0, 0, .18);
+}
+.dshws-row[data-git] { --g: var(--dsw-alias-label-secondary); }
+.dshws-row[data-git="M"] { --g: #c27c00; }
+.dshws-row[data-git="A"] { --g: #16a34a; }
+.dshws-row[data-git="??"] { --g: #2f9e6e; }
+.dshws-row[data-git="D"] { --g: #e5484d; }
+.dshws-row[data-git="R"] { --g: #3b82f6; }
+.dshws-row[data-git="U"] { --g: #a855f7; }
+.dshws-row[data-git] .dshws-row-name { color: var(--g); }
+.dshws-gdec {
+  margin-left: auto; flex-shrink: 0; min-width: 14px; padding: 0 3px; text-align: center;
+  font: 700 10px/16px ui-monospace, Consolas, monospace; color: var(--g);
+}
+.dshws-gdot { margin-left: auto; flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--g); opacity: .85; }
+.dshws-ctx-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dshws-ctx-more { margin-left: auto; padding-left: 12px; color: var(--dsw-alias-label-tertiary); }
+.dshws-ctx-item[data-open="true"] { background: var(--dsw-alias-interactive-bg-hover); }
+
 /* 注意不能叫 .dshws-empty：主页面已有同名类（带虚线框），会串样式。 */
 .dshws-emptystate {
   display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 28px 16px;

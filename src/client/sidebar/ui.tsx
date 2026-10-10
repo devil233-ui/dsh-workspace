@@ -41,6 +41,12 @@ export const IconRefresh = (p: IconProps) => (
     <path d="M13 3v2.5h-2.5" />
   </Svg>
 )
+export const IconSearch = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="7" cy="7" r="4.5" />
+    <path d="M10.5 10.5L14 14" />
+  </Svg>
+)
 export const IconClose = (p: IconProps) => (
   <Svg {...p}>
     <path d="M4 4l8 8M12 4l-8 8" />

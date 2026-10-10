@@ -11,9 +11,16 @@
  *        host=local:* 为本机任意路径只读（见 local-fs.ts 的 resolveReadablePath）。
  *   POST /dsh-workspace/sftp/upload?host=<id>&dir=<远端目录>&name=<文件名>&overwrite=0|1
  *        请求体 = 文件原始字节
+ *   POST /dsh-workspace/sftp/archive?host=<id>   请求体 {paths: string[], name?: string}
+ *        遍历并检查上限（文件数 / 总大小，超限 413），返回一次性令牌 {token, files, bytes}；本机限会话工作区内
+ *   GET  /dsh-workspace/sftp/archive?token=<令牌>   流式输出 ZIP（令牌 60 秒内有效、只能用一次）
+ *        为什么分两步：下载要走 <a download>（大文件不进页面内存），而它只能发 GET；超限错误要在开始下载前以 JSON 返回。
  */
+import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Transform } from 'node:stream'
+import { ARCHIVE_MAX_PATHS, ArchiveLimitError, localArchiveSource, outermost, planArchive, remoteArchiveSource, writeArchive, type ArchivePlan, type ArchiveSource } from './archive.js'
+import { ZipWriter } from './zip.js'
 import { isTrustedRequest } from '../terminal/trust-fence.js'
 import { VaultLockedError, VaultUninitializedError } from '../vault/store.js'
 import { ERROR_CODES, SFTP_HTTP_PREFIX } from '../wire/contract.js'
@@ -51,7 +58,7 @@ function mapError(res: ServerResponse, error: unknown): void {
   if (error instanceof VaultLockedError) return fail(res, 423, ERROR_CODES.vaultLocked, error.message)
   if (error instanceof VaultUninitializedError) return fail(res, 423, ERROR_CODES.vaultUninitialized, error.message)
   if (error instanceof RemoteExistsError) return fail(res, 409, ERROR_CODES.exists, error.message)
-  if (error instanceof UploadTooLargeError) return fail(res, 413, 'dsh-workspace/too-large', error.message)
+  if (error instanceof UploadTooLargeError || error instanceof ArchiveLimitError) return fail(res, 413, 'dsh-workspace/too-large', error.message)
   const message = error instanceof Error ? error.message : String(error)
   const code = typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined
   const notFound = code === 2 || code === 'ENOENT'
@@ -125,8 +132,120 @@ export function inlineMimeOf(name: string): string | undefined {
   return dot === -1 ? undefined : INLINE_MIME[name.slice(dot + 1).toLowerCase()]
 }
 
+/** 读取 JSON 请求体（有上限）。 */
+function readJsonBody(req: IncomingMessage, limit: number): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    let size = 0
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length
+      if (size > limit) {
+        reject(new Error('请求体过大。'))
+        req.destroy()
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.once('error', reject)
+    req.once('end', () => {
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown)
+      } catch {
+        reject(new Error('请求体不是合法的 JSON。'))
+      }
+    })
+  })
+}
+
+/** 打包请求体：{ paths: string[], name?: string }。外形在这里校验，路径范围由各来源校验。 */
+export function parseArchivePaths(body: unknown): string[] {
+  const paths = (body as { paths?: unknown } | null)?.paths
+  if (!Array.isArray(paths) || paths.length === 0) throw new Error('没有选择要打包的文件。')
+  if (paths.length > ARCHIVE_MAX_PATHS) throw new ArchiveLimitError(`一次最多选择 ${ARCHIVE_MAX_PATHS} 项。`)
+  for (const p of paths) {
+    if (typeof p !== 'string' || p === '' || p.length > 4096 || !p.startsWith('/') || /[\u0000-\u001f]/.test(p)) throw new Error(`非法路径：${String(p).slice(0, 200)}`)
+  }
+  return paths as string[]
+}
+
+/** 下载文件名：用浏览器给的名字（去掉路径与非法字符），没有就按选中项推一个。 */
+export function archiveName(body: unknown, firstBase: string, count: number): string {
+  const raw = (body as { name?: unknown } | null)?.name
+  const pick = typeof raw === 'string' && raw.trim() !== '' ? raw : count === 1 ? firstBase : 'archive'
+  const clean = pick.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim().slice(0, 120).replace(/\.zip$/i, '') || 'archive'
+  return `${clean}.zip`
+}
+
+interface PendingArchive {
+  hostId: string
+  local: boolean
+  plan: ArchivePlan
+  name: string
+  expires: number
+}
+
+/** 令牌有效期：第一步校验完到浏览器发起下载通常不到一秒，给足余量即可。 */
+const ARCHIVE_TOKEN_TTL_MS = 60_000
+const ARCHIVE_TOKEN_MAX = 32
+
 /** 路由处理器。返回的函数直接交给 webServer.register({ kind: 'prefix' })。 */
 export function createSftpHttpHandler(deps: SftpHttpDeps) {
+  // 打包令牌：一次性、短时有效，只存在内存里（宿主重启即失效）。
+  const archives = new Map<string, PendingArchive>()
+  const issueArchive = (entry: Omit<PendingArchive, 'expires'>): string => {
+    const now = Date.now()
+    for (const [k, v] of archives) if (v.expires < now) archives.delete(k)
+    while (archives.size >= ARCHIVE_TOKEN_MAX) archives.delete(archives.keys().next().value as string)
+    const token = randomBytes(16).toString('hex')
+    archives.set(token, { ...entry, expires: now + ARCHIVE_TOKEN_TTL_MS })
+    return token
+  }
+
+  const sendArchive = async (token: string, req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    const entry = archives.get(token)
+    if (entry === undefined || entry.expires < Date.now()) {
+      archives.delete(token)
+      return fail(res, 404, ERROR_CODES.notFound, '下载链接已失效，请重新选择「压缩并下载」。')
+    }
+    // HEAD 不消耗令牌（部分下载器会先探测）。
+    if (req.method === 'HEAD') {
+      res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Disposition': contentDisposition(entry.name), 'Cache-Control': 'no-store' }).end()
+      return
+    }
+    archives.delete(token)
+    const logHost = entry.local ? '' : entry.hostId
+    let src: ArchiveSource
+    try {
+      src = entry.local ? localArchiveSource(deps.localFs as LocalFs, entry.hostId) : await remoteArchiveSource(deps.fs, entry.hostId)
+    } catch (error) {
+      return mapError(res, error)
+    }
+    const zip = new ZipWriter()
+    let aborted = false
+    res.writeHead(200, {
+      'Content-Type': 'application/zip',
+      'Content-Disposition': contentDisposition(entry.name),
+      'Cache-Control': 'no-store, no-transform',
+      'X-Content-Type-Options': 'nosniff'
+    })
+    // 浏览器取消下载：停止读取源文件（不让 SFTP 继续空转）。
+    res.on('close', () => {
+      if (!res.writableFinished) {
+        aborted = true
+        zip.abort()
+      }
+    })
+    zip.output.pipe(res)
+    try {
+      await writeArchive(src, entry.plan, zip, () => aborted)
+      deps.rt.log.info(logHost, 'sftp', `已打包下载 ${entry.name}（${entry.plan.files} 个文件，${entry.plan.bytes} 字节）`)
+    } catch (error) {
+      if (!aborted) deps.rt.log.error(logHost, 'sftp', `打包中断：${entry.name}`, error)
+      zip.abort()
+      res.destroy()
+    }
+  }
+
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     // 与 /api 网关、终端 socket 同一道围栏：挡住 DNS 重绑定与跨站请求。
     // 下载走 GET，恶意页面用 <a>/<img> 触发时浏览器会带 sec-fetch-site: cross-site，在此被拒。
@@ -160,6 +279,11 @@ export function createSftpHttpHandler(deps: SftpHttpDeps) {
 
     const url = new URL(req.url ?? '/', 'http://x')
     const action = url.pathname.slice(SFTP_HTTP_PREFIX.length + 1)
+    // 打包下载的第二步只带令牌（主机与路径在第一步已校验并记在令牌里）。
+    if (action === 'archive' && (req.method === 'GET' || req.method === 'HEAD')) {
+      await sendArchive(url.searchParams.get('token') ?? '', req, res)
+      return
+    }
     const hostId = url.searchParams.get('host') ?? ''
     // local:* = 本机任意路径只读（查看器打开工作区外的文件用），只允许下载。
     const anyLocal = hostId === LOCAL_ANY_ID
@@ -225,6 +349,26 @@ export function createSftpHttpHandler(deps: SftpHttpDeps) {
     }
     if (anyLocal) return fail(res, 405, 'dsh-workspace/bad-request', 'read-only')
 
+    if (action === 'archive' && req.method === 'POST') {
+      try {
+        const body = await readJsonBody(req, 1024 * 1024)
+        const paths = parseArchivePaths(body)
+        const src = local ? localArchiveSource(deps.localFs as LocalFs, hostId) : await remoteArchiveSource(deps.fs, hostId)
+        // 本机：线上路径先经 LocalFs.resolve 校验在工作区内并换成原生路径。
+        const sources = local ? await (src as ReturnType<typeof localArchiveSource>).resolvePaths(outermost(paths)) : outermost(paths)
+        const plan = await planArchive(src, sources)
+        const name = archiveName(body, src.base(sources[0] as string), sources.length)
+        const token = issueArchive({ hostId, local, plan, name })
+        const out = JSON.stringify({ ok: true, token, name, files: plan.files, bytes: plan.bytes })
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' })
+        res.end(out)
+      } catch (error) {
+        deps.rt.log.error(local ? '' : hostId, 'sftp', '打包失败。', error)
+        req.resume()
+        mapError(res, error)
+      }
+      return
+    }
 
     if (action === 'upload' && req.method === 'POST') {
       try {

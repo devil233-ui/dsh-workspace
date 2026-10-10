@@ -9,7 +9,8 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 
-export type MenuItem = { id: string; label: string; danger?: boolean; disabled?: boolean; icon?: ReactNode } | { type: 'separator' }
+/** children：子菜单（悬停或点击展开；子项的 id 同样回调 onSelect）。 */
+export type MenuItem = { id: string; label: string; danger?: boolean; disabled?: boolean; icon?: ReactNode; children?: MenuItem[] } | { type: 'separator' }
 
 interface OpenMenu {
   x: number
@@ -35,8 +36,17 @@ export function useContextMenu(): [ReactNode, (e: ReactMouseEvent, items: MenuIt
 }
 
 function ContextMenuView(props: { menu: OpenMenu; onClose(): void }) {
+  const layerRef = useRef<HTMLDivElement>(null)
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ left: props.menu.x, top: props.menu.y })
+  /** 展开着的子菜单：父项下标 + 父项的位置（子菜单贴在它右侧，放不下翻到左侧）。 */
+  const [sub, setSub] = useState<{ index: number; rect: { left: number; right: number; top: number } } | null>(null)
+  const openSub = (index: number, el: HTMLElement): void => {
+    if (sub?.index === index) return
+    const r = el.getBoundingClientRect()
+    setSub({ index, rect: { left: r.left, right: r.right, top: r.top } })
+  }
+  const subItems = sub === null ? undefined : (props.menu.items[sub.index] as { children?: MenuItem[] } | undefined)?.children
 
   // 按实际尺寸收进视口（右边 / 下边放不下就往左 / 往上翻）。
   useLayoutEffect(() => {
@@ -51,7 +61,7 @@ function ContextMenuView(props: { menu: OpenMenu; onClose(): void }) {
   useEffect(() => {
     const close = props.onClose
     const onDown = (e: MouseEvent): void => {
-      if (ref.current?.contains(e.target as Node) !== true) close()
+      if (layerRef.current?.contains(e.target as Node) !== true) close()
     }
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') close()
@@ -68,9 +78,65 @@ function ContextMenuView(props: { menu: OpenMenu; onClose(): void }) {
     }
   }, [props.onClose])
 
+  const select = (id: string): void => {
+    props.onClose()
+    props.menu.onSelect(id)
+  }
+
   return (
-    <div ref={ref} className="dshws-ctx" role="menu" style={{ left: pos.left, top: pos.top }} onContextMenu={(e) => e.preventDefault()}>
-      {props.menu.items.map((item, i) =>
+    <div ref={layerRef} className="dshws-ctx-layer">
+      <div ref={ref} className="dshws-ctx" role="menu" style={{ left: pos.left, top: pos.top }} onContextMenu={(e) => e.preventDefault()}>
+        {props.menu.items.map((item, i) =>
+          'type' in item ? (
+            <div key={`sep-${i}`} className="dshws-ctx-sep" />
+          ) : (
+            <button
+              key={item.id}
+              type="button"
+              role="menuitem"
+              className="dshws-ctx-item"
+              data-danger={item.danger === true}
+              data-open={sub?.index === i}
+              aria-haspopup={item.children !== undefined ? 'menu' : undefined}
+              disabled={item.disabled === true || (item.children !== undefined && item.children.length === 0)}
+              onMouseEnter={(e) => {
+                if (item.children !== undefined) openSub(i, e.currentTarget)
+                else setSub(null)
+              }}
+              onClick={(e) => {
+                // 有子菜单的项只负责展开（触屏上没有悬停，点一下展开）。
+                if (item.children !== undefined) openSub(i, e.currentTarget)
+                else select(item.id)
+              }}
+            >
+              <span className="dshws-ctx-ico">{item.icon ?? null}</span>
+              <span className="dshws-ctx-label">{item.label}</span>
+              {item.children !== undefined ? <span className="dshws-ctx-more" aria-hidden="true">›</span> : null}
+            </button>
+          )
+        )}
+      </div>
+      {sub !== null && subItems !== undefined ? <SubMenu items={subItems} anchor={sub.rect} onSelect={select} /> : null}
+    </div>
+  )
+}
+
+/** 子菜单：贴在父项右侧，右边放不下翻到左侧，下边放不下向上收。 */
+function SubMenu(props: { items: MenuItem[]; anchor: { left: number; right: number; top: number }; onSelect(id: string): void }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState({ left: props.anchor.right - 2, top: props.anchor.top - 4 })
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (el === null) return
+    const { width, height } = el.getBoundingClientRect()
+    const right = props.anchor.right - 2
+    const left = right + width > window.innerWidth - 4 ? Math.max(4, props.anchor.left - width + 2) : right
+    const top = Math.max(4, Math.min(props.anchor.top - 4, window.innerHeight - height - 4))
+    setPos({ left, top })
+  }, [props.anchor])
+  return (
+    <div ref={ref} className="dshws-ctx" data-sub="true" role="menu" style={{ left: pos.left, top: pos.top }} onContextMenu={(e) => e.preventDefault()}>
+      {props.items.map((item, i) =>
         'type' in item ? (
           <div key={`sep-${i}`} className="dshws-ctx-sep" />
         ) : (
@@ -81,13 +147,10 @@ function ContextMenuView(props: { menu: OpenMenu; onClose(): void }) {
             className="dshws-ctx-item"
             data-danger={item.danger === true}
             disabled={item.disabled}
-            onClick={() => {
-              props.onClose()
-              props.menu.onSelect(item.id)
-            }}
+            onClick={() => props.onSelect(item.id)}
           >
             <span className="dshws-ctx-ico">{item.icon ?? null}</span>
-            <span>{item.label}</span>
+            <span className="dshws-ctx-label">{item.label}</span>
           </button>
         )
       )}

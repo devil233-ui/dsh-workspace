@@ -35,6 +35,19 @@
 - 新增：分派白名单 `FILE_VIEWER_EXTS`（`src/client/viewers/dispatch.ts`，与装配的渲染器定义由单测校验一致）：用户把扩展名关联到 file-viewer、但该格式未装配时，文本类退回 Monaco，其余退回下载。
 - 文档：查看器第三方声明（`lib/assets/viewers/fv/NOTICE.md`，由 `scripts/build-viewers.mjs` 生成）补充 `@file-viewer/doc`（MIT）与 heic2any 内含 libheif（LGPL-3.0）的说明；`scripts/verify-viewers-browser.mjs` 新增兜底提示 / 纯文本兜底 / 不出现「尚未装配」检查，设置 `DSHWS_DOC_FIXTURE` 时另验证 .doc 正文渲染。
 
+### 文件管理（文件树）
+
+- 新增：「文件管理」文件树增强（本机与远程会话通用）。
+  - 文件名搜索：工具栏搜索按钮展开搜索框（复用 `sftpSearch`，300ms 防抖）；点文件打开并在树中定位，点目录退出搜索并展开定位。
+  - 自动刷新：每 3 秒批量取展开目录的 mtime（新网关方法 `sftpDirStamps`，最多 200 个目录），变了的目录静默重载、被删的目录重载其父目录；页面隐藏或标签不在前台时暂停。「侧边栏」页签新增「文件树 → 自动刷新」开关（偏好 `sidebar.autoRefresh`，默认开）。
+  - Git 状态：文件显示 M / A / D / R / U（冲突）/ ??（未跟踪）徽标并着色，含改动的目录按最严重的改动着色；非 Git 仓库静默不显示；开启自动刷新时每 10 秒或目录变化时更新，手动刷新也会更新。
+  - 右键「在对话中引用」：单个文件以宿主原生 @ 引用芯片插入输入框（`slash/input-insert-reference`），目录 / 多选写入文本 `@路径`（工作区内为相对路径）；找不到输入框时复制到剪贴板。
+  - 右键「打开方式」子菜单：本机会话可用系统默认应用 / 在文件管理器中显示（宿主 open-in-app）；内置 VS Code / Cursor / Zed（远程文件走 `vscode-remote/ssh-remote+user@host`、`zed://ssh/...`）；自定义 URL 模板（偏好 `sidebar.openWith`，变量 `{path}` `{host}` `{user}` `{port}`，在「侧边栏」页签编辑）。桌面版经新网关方法 `openExternalUrl` 由宿主调用系统 URL 处理程序（不经 shell），只放行内置编辑器协议、http(s) 与已保存模板的协议，`file:` / `javascript:` / `ms-*` 等一律拒绝。
+  - 拖放上传：把文件 / 文件夹拖到目录行（上传到该目录）、文件行（其所在目录）或空白处（根目录），文件夹保留目录结构（含空目录），同名时询问覆盖；窄屏不提供拖放。
+  - 多选：Ctrl/⌘ 点选、Shift 连选，Esc 或「取消选择」清空；多选右键为批量菜单：复制相对 / 绝对路径、在对话中引用、压缩并下载、删除（确认框写明数量，已被选中目录包含的子项不重复删除）。
+  - 压缩并下载 ZIP：新 HTTP 路由 `POST /dsh-workspace/sftp/archive`（遍历并检查上限，返回一次性令牌）+ `GET /dsh-workspace/sftp/archive?token=`（流式输出），远程经 SFTP 读流、本机限会话工作区内；上限 10000 个文件 / 2GB，超限在下载开始前报错；符号链接不打包。ZIP 写入器为自带的最小实现（deflate + 数据描述符 + UTF-8 文件名，`src/sftp/zip.ts`），未引入新依赖。
+  - 右键菜单支持子菜单（悬停或点击展开，放不下时向左翻）。
+
 - 不提供：底部 dock（输入框上方的终端 / 后台任务 / Git 改动面板，方案 3.9）—— 按用户决定取消，开发中的实现、页头开合按钮、「侧边栏」页签的「底部 dock」开关与偏好 `sidebar.tabs.dock` 均已删除。已有 `prefs.json` 里残留的 `tabs.dock` 读取时被忽略、下次保存不再写出；升级后仍开着的旧页面提交该键也不会让整次保存被拒。Git 标签的导航参数 `aiOpen`（打开某文件的 AI 改动 diff）保留。
 
 ### 对外打开入口

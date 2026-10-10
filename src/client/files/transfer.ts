@@ -95,12 +95,40 @@ export function downloadUrl(hostId: string, remotePath: string): string {
  * 自定义协议页面（DSH NEXT）：导航请求拿不到令牌，改为 fetch（主框架子资源请求）取回再存盘。
  */
 export function startDownload(hostId: string, remotePath: string): void {
-  const url = downloadUrl(hostId, remotePath)
+  startUrlDownload(downloadUrl(hostId, remotePath), baseName(remotePath))
+}
+
+/** 按同源相对地址触发下载（规则同 startDownload）。 */
+export function startUrlDownload(url: string, name: string): void {
   if (isCustomSchemePage()) {
-    void fetchDownload(url, baseName(remotePath))
+    void fetchDownload(url, name)
     return
   }
-  saveAs(url, baseName(remotePath))
+  saveAs(url, name)
+}
+
+/**
+ * 多选「压缩并下载」：先 POST 路径列表（宿主遍历并检查上限，超限在这一步就报错），拿到一次性令牌后再按 GET 下载。
+ * 返回打包的文件数与总字节（界面提示用）。
+ */
+export async function downloadArchive(hostId: string, paths: readonly string[], name?: string): Promise<{ files: number; bytes: number }> {
+  const res = await fetch(`${SFTP_HTTP_PREFIX}/archive?${new URLSearchParams({ host: hostId }).toString()}`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paths, ...(name !== undefined ? { name } : {}) })
+  })
+  const body = parseJson(await res.text())
+  if (!res.ok || typeof body.token !== 'string') {
+    throw new TransferError(
+      typeof body.code === 'string' ? body.code : ERROR_CODES.failed,
+      typeof body.message === 'string' ? body.message : `打包失败（HTTP ${res.status}）`,
+      res.status
+    )
+  }
+  const zipName = typeof body.name === 'string' ? body.name : `${name ?? 'archive'}.zip`
+  startUrlDownload(`${SFTP_HTTP_PREFIX}/archive?${new URLSearchParams({ token: body.token }).toString()}`, zipName)
+  return { files: Number(body.files) || 0, bytes: Number(body.bytes) || 0 }
 }
 
 function saveAs(href: string, name: string): void {

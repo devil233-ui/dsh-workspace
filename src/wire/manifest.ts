@@ -7,6 +7,7 @@ import { z } from 'zod'
 import { PACKAGE, buildDescriptors, type Codec, type MethodName } from './contract.js'
 import type { MethodIO } from './dto.js'
 import { ASSOC_MAX, ASSOC_MODES, ASSOC_VIEWERS, CUSTOM_CSS_MAX, LARGE_FILE_MB_MAX, LARGE_FILE_MB_MIN, RETIRED_SIDEBAR_TAB_KEYS, SESSION_ID_MAX, SIDEBAR_TAB_KEYS, SIDECHATS_MAX } from './sidebar-prefs.js'
+import { DIR_STAMPS_MAX, OPEN_URL_MAX, OPEN_WITH_MAX, OPEN_WITH_NAME_MAX } from './open-with.js'
 
 // 编译期保证 dto 的 MethodIO 与 contract 的 METHODS 一一对应，漏一个直接报错。
 type AssertSameKeys<A, B> = [Exclude<keyof A, B>, Exclude<B, keyof A>] extends [never, never]
@@ -167,6 +168,8 @@ const INPUTS: Record<MethodName, z.ZodType> = {
   setSidebarPrefs: sidebarPrefsPatch(),
   betterSidebarStatus: empty,
   betterSidebarSetEnabled: z.object({ enabled: z.boolean() }).strict(),
+  sftpDirStamps: z.object({ hostId: id, paths: z.array(remotePath).max(DIR_STAMPS_MAX) }),
+  openExternalUrl: z.object({ url: z.string().min(1).max(OPEN_URL_MAX) }).strict(),
 }
 
 /** 「侧边栏」偏好的局部更新：严格模式，未知字段直接拒绝（防止浏览器把任意数据写进偏好文件）。 */

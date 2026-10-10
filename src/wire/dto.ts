@@ -202,6 +202,16 @@ export interface MethodIO {
   betterSidebarStatus: [Record<string, never>, BetterSidebarStatus]
   /** 禁用 / 启用 dsh-better-sidebar（整个 profile 生效，界面先确认）。 */
   betterSidebarSetEnabled: [{ enabled: boolean }, BetterSidebarToggleOutput]
+  /**
+   * 文件树自动刷新：一批目录的修改时间（毫秒；不存在 / 无权限为 null）。目录增删改名条目时 mtime 变化，
+   * 浏览器轮询比对后只重载变了的目录。本机限会话工作区内，远程沿用其余 sftp* 方法的规则。
+   */
+  sftpDirStamps: [{ hostId: string; paths: string[] }, { stamps: Record<string, number | null> }]
+  /**
+   * 「打开方式」：由宿主调用系统 URL 处理程序打开编辑器 URL（vscode:// 等）。桌面版渲染进程拒绝打开非 http(s) 的新窗口，只能经宿主。
+   * 只放行内置编辑器协议与用户在「侧边栏」页配置过的模板协议。
+   */
+  openExternalUrl: [{ url: string }, { ok: true }]
 }
 
 export interface LocalListOutput {

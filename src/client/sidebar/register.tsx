@@ -28,6 +28,7 @@ import { getSidebarPrefs, subscribeSidebarPrefs } from '../sidebar-prefs.js'
 import type { SidebarTabKey } from '../../wire/sidebar-prefs.js'
 import { FILE_ID, FILES_ID, GIT_ID, SSH_ID, TASKS_KIND } from './kinds.js'
 import { createSidebarOpener, registerOpenToolViews, setWorkspaceOpener } from './open-in-sidebar.js'
+import { setSidebarHost } from './host-bridge.js'
 
 interface TabRegistry {
   register(definition: {
@@ -82,6 +83,8 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
     log('宿主不支持 ctx.inject，跳过右侧栏接入')
     return () => undefined
   }
+  // 文件树的 @ 引用 / 系统打开要用宿主服务（见 host-bridge.ts）。
+  setSidebarHost(ctx)
   const index = new RemoteIndex(
     async () => (await api.call('remoteWorkspaces', {})).workspaces,
     () => ctx.get('sessions') as never
@@ -335,6 +338,7 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
   }
 
   return () => {
+    setSidebarHost(undefined)
     offToolViews()
     offOpener()
     offPresent()
