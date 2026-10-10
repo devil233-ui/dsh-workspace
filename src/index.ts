@@ -27,6 +27,7 @@ import { PREVIEW_PREFIX, createPreviewHandler } from './preview-route.js'
 import { fileURLToPath } from 'node:url'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { mountAgentTools, remotePromptText } from './agent/register.js'
+import { createHostInternal, type ProbeContext } from './host-internal/index.js'
 
 export const name = 'dsh-workspace'
 
@@ -169,6 +170,21 @@ export function apply(ctx: Context, config: PluginConfig): void {
       }
     }, 'dsh-workspace: session persistence')
   })
+
+  // 任务页（方案 3.7）的宿主内部对象适配层：只做结构探测，构造或监听失败都不影响插件其余部分。
+  ctx.effect(() => {
+    try {
+      const internal = createHostInternal(ctx as unknown as ProbeContext)
+      runtime.host.internal = internal
+      return () => {
+        runtime.host.internal = undefined
+        internal.dispose()
+      }
+    } catch (cause) {
+      log.warn('', 'startup', `任务页宿主适配层初始化失败，任务页数据将不可用：${cause instanceof Error ? cause.message : String(cause)}`)
+      return () => undefined
+    }
+  }, 'dsh-workspace: host internal')
 
   // P1：远程会话的 Agent 工具。只在会话 cwd 属于远程工作区时接管内置工具，本地会话零影响；
   // 例外是 open_in_sidebar（本机 / 远程都注册，受「侧边栏」偏好 openInSidebar 控制，切换即时生效）。

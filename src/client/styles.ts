@@ -8,6 +8,7 @@
  * 所有类名带 dshws- 前缀，避免与宿主或其他插件冲突。
  */
 import { XTERM_CSS } from './terminal/xterm-css.generated.js'
+import { TASKS_CSS } from './tasks/styles.js'
 
 export const STYLE_ID = 'dsh-workspace-styles'
 
@@ -1298,7 +1299,7 @@ export function injectStyles(): () => void {
   if (existing !== null) existing.remove()
   const style = document.createElement('style')
   style.id = STYLE_ID
-  style.textContent = `${XTERM_CSS}\n${CSS}`
+  style.textContent = `${XTERM_CSS}\n${CSS}\n${TASKS_CSS}`
   document.head.appendChild(style)
   return () => {
     style.remove()

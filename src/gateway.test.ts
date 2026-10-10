@@ -749,6 +749,27 @@ describe('本地工作区（hostId = local:<会话 id>）', () => {
     await expectCode(gw.openExternalUrl({ url: 'myapp://open?x=1' }), ERROR_CODES.failed)
   })
 })
+describe('任务页（tasksSubagentLive / tasksWorkflowRuns / teamsTask*）', () => {
+  it('宿主内部对象缺失：返回不可用，不抛错', async () => {
+    expect(rt.host.internal).toBeUndefined()
+    expect(await gw.tasksSubagentLive({ rootSessionId: 'r' })).toEqual({ available: false, live: {} })
+    expect(await gw.tasksWorkflowRuns({ rootSessionId: 'r' })).toEqual({ available: false, runs: [] })
+    expect(await gw.teamsTaskCreate({ rootSessionId: 'r', subject: 's' })).toMatchObject({ ok: false, reason: 'unavailable' })
+    expect(await gw.teamsTaskUpdate({ rootSessionId: 'r', taskId: 't', expectedRevision: 0, action: 'complete' })).toMatchObject({ ok: false, reason: 'unavailable' })
+  })
+
+  it('网关输入校验：动作必须在白名单内，未知字段拒绝', () => {
+    const d = HOST_MANIFEST.invocations.find((x) => x.method === 'teamsTaskUpdate') as {
+      parameters: Array<{ codec: { schema: { parse(v: unknown): unknown } } }>
+    }
+    const schema = d.parameters[0]!.codec.schema
+    expect(() => schema.parse({ rootSessionId: 'r', taskId: 't', expectedRevision: 0, action: 'complete' })).not.toThrow()
+    expect(() => schema.parse({ rootSessionId: 'r', taskId: 't', expectedRevision: 0, action: 'claim' })).toThrow()
+    expect(() => schema.parse({ rootSessionId: 'r', taskId: 't', expectedRevision: -1, action: 'complete' })).toThrow()
+    expect(() => schema.parse({ rootSessionId: 'r', taskId: 't', expectedRevision: 0, action: 'complete', owner: 'x' })).toThrow()
+  })
+})
+
 describe('AI 改动（aiChanges / aiChangeBase）', () => {
   const ev = (seq: number, turn: number, callId: string, name: string, args: unknown) => ({ seq, type: 'tool/call', data: { turn, callId, name, arguments: JSON.stringify(args) } })
 

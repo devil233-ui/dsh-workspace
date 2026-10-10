@@ -25,6 +25,7 @@ import { Updater, type PluginManagerLike } from './update/updater.js'
 import { realpath } from 'node:fs/promises'
 import { LOCAL_ANY_ID, LocalFs, sessionOfLocalId, type LocalScope } from './local/local-fs.js'
 import { LocalGit } from './local/local-git.js'
+import type { HostInternal } from './host-internal/index.js'
 
 /** 插件运行时配置（与 index.ts 的 Config schema 对应）。 */
 export interface RuntimeConfig {
@@ -91,6 +92,8 @@ export interface HostServices {
   sessions: SessionsLike | undefined
   /** 冷会话（未加载进内存）的持久化记录。 */
   sessionPersistence: SessionPersistenceLike | undefined
+  /** 宿主内部对象适配层（任务页：子代理 / 团队 / 会话事件，见 host-internal/）；未装配时任务页数据返回不可用。 */
+  internal: HostInternal | undefined
 }
 
 export interface SessionPersistenceLike {
@@ -162,7 +165,7 @@ export function createRuntime(config: RuntimeConfig, overrides: RuntimeOverrides
   // 所以先建出不含它们的部分，再补上。
   const prefs = new PrefsStore()
   const web: WebState = { mounted: false, assetsDir: undefined }
-  const host: HostServices = { pluginManager: undefined, sessions: undefined, sessionPersistence: undefined }
+  const host: HostServices = { pluginManager: undefined, sessions: undefined, sessionPersistence: undefined, internal: undefined }
   // 包根目录的 package.json：打包后本文件在 lib/index.js，源码时在 src/runtime.ts，上一级都是包根。
   const updater = new Updater({
     packageFile: fileURLToPath(new URL('../package.json', import.meta.url)),

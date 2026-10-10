@@ -33,6 +33,8 @@ import { BetterSidebarError, betterSidebarSetEnabled, betterSidebarStatus } from
 import { isAllowedExternalUrl } from './wire/open-with.js'
 import { openExternal } from './open-external.js'
 import { foldAiChanges } from './agent/ai-changes.js'
+import { subagentLive, workflowRuns } from './tasks/service.js'
+import { createTeamTask, updateTeamTask } from './host-internal/teams.js'
 
 /** 远程（RemoteFs）与本地（LocalFs）共同的文件操作面。 */
 type FileOps = Pick<
@@ -960,6 +962,26 @@ export class WorkspaceGateway extends RemoteService {
       if (this.aiCache.size > 32) this.aiCache.delete(this.aiCache.keys().next().value as string)
       return result
     })
+  }
+
+  /** 任务页：任务树每个会话的实时活动摘要（宿主内部对象缺失时 available=false）。 */
+  tasksSubagentLive(input: In<'tasksSubagentLive'>): Out<'tasksSubagentLive'> {
+    return this.guard(() => subagentLive(this.rt.host.internal, input.rootSessionId))
+  }
+
+  /** 任务页：任务树内的工作流 run。树根不在内存时退回只读打开持久化日志（与 AI 改动同一入口）。 */
+  tasksWorkflowRuns(input: In<'tasksWorkflowRuns'>): Out<'tasksWorkflowRuns'> {
+    return this.guard(() => workflowRuns(this.rt.host.internal, input.rootSessionId, async (id) => (await this.sessionEvents(id))?.events))
+  }
+
+  /** 团队看板：新建任务。拒绝原因以结果返回（不抛错），浏览器按 reason 提示。 */
+  teamsTaskCreate(input: In<'teamsTaskCreate'>): Out<'teamsTaskCreate'> {
+    return this.guard(() => createTeamTask(this.rt.host.internal, input))
+  }
+
+  /** 团队看板：修改任务（CAS，revision 过期 → reason:'conflict'）。 */
+  teamsTaskUpdate(input: In<'teamsTaskUpdate'>): Out<'teamsTaskUpdate'> {
+    return this.guard(() => updateTeamTask(this.rt.host.internal, input))
   }
 
   /** 远程会话里某文件被改之前的原文（agent/preimages.ts 的基线）；拿不到返回 null，浏览器退回相对 HEAD。 */

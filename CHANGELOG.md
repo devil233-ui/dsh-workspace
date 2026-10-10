@@ -57,6 +57,15 @@
 - 变更：Git 文件列表整行可点 —— 「历史」提交详情的改动文件（原来只能点到文字）、「改动」页（含查看分支时的改动 / 比较列表）与「AI 改动」页，点击行内任意位置打开 diff；行带悬停高亮与手型光标，可键盘操作（`role="button"`、Tab 聚焦、Enter / Space 打开），行内的暂存 / 丢弃等按钮不触发整行点击（`src/client/sidebar/row-activate.ts`）。
 - 新增：Git 对比视图对疑似密钥打码（只作用于显示，暂存 / 提交 / 写回仍是真实内容）：常见令牌前缀（sk-、ghp_、github_pat_、AKIA、xoxb- 等）、PEM 私钥正文、`.env` 风格 `KEY=VALUE` 中名称含 SECRET / TOKEN / KEY / PASSWORD 的值、YAML / JSON 的 password / apiKey 等字段、行内 `password=` / `token=` / `secret=`、URL 里的口令、Bearer 凭据；保留首尾少量字符。命中时标题下出现「已打码 · 显示原文」开关，可临时显示原文，换一个 diff 自动恢复打码（`src/client/sidebar/redact.ts`）。
 
+### 任务页、侧边对话
+
+- 新增：右侧栏「任务」页（kind `dshws-tasks`，出现在右侧栏引导列表，受「侧边栏」页签的「任务」开关控制），范围是当前会话所在的任务树（沿父链找到根 + 全部子代理）：
+  - 后台任务：经宿主 `ctx.jobs` 列出任务树内的后台任务（进行中在前，带类型、时长、退出码 / 结束详情），展开看实时输出（`observe`，不移动模型的 `job_output` 读取游标；输出缺口 / 流中断有提示），运行中的任务可终止（两击确认，3 秒内有效）。页签不可见时停止 watch。
+  - 子代理：树视图 / 拓扑图视图（自绘分层 DAG + SVG，不引入布局库）切换并记住选择；数据来自会话投影 `subagentCatalog`，节点显示运行状态、正在执行的工具 / 最近文本、本轮工具次数；点击在侧栏打开子代理对话（宿主 `subagentchat` 资源），「↗」在主区打开，树根回到主会话。
+  - 子代理实时活动摘要：新网关方法 `tasksSubagentLive`（`subagents.listDescendants` + 各会话 `snapshotEvents()` 尾部折叠）；工作流 run：新网关方法 `tasksWorkflowRuns`（折叠任务树各会话的 `tool-workflow/*` 四种事件，并合并 `session/event` 实时镜像；冷树根只读打开持久化日志），页签可见时每 3 秒轮询。
+  - 团队看板：读 Lead 会话投影 `agentTeam`（成员 + 待办 / 进行中 / 已完成三列），新建 / 完成 / 重新打开 / 删除（两击确认）经新网关方法 `teamsTaskCreate` / `teamsTaskUpdate` 代表 Lead 调 `agentTeams.createTask` / `updateTask`；revision 过期提示「已被其他成员修改」，Lead 不在运行 / 不是 Lead / 实验层缺失分别提示。
+  - 自动打开：新子代理或新后台任务出现时，若「自动打开任务页」开启、视口宽于 640px，打开任务页（只观察显示中的会话；切到老会话不触发；每个新对象只触发一次）。
+  - 宿主内部对象（subagents / agentTeams / agents / 会话事件 / `session/event`）统一封装在 `src/host-internal/`，只做结构探测；缺失时网关返回不可用、页面对应区块显示「当前 DSH 版本不支持」或隐藏，不影响插件加载。
 - 不提供：底部 dock（输入框上方的终端 / 后台任务 / Git 改动面板，方案 3.9）—— 按用户决定取消，开发中的实现、页头开合按钮、「侧边栏」页签的「底部 dock」开关与偏好 `sidebar.tabs.dock` 均已删除。已有 `prefs.json` 里残留的 `tabs.dock` 读取时被忽略、下次保存不再写出；升级后仍开着的旧页面提交该键也不会让整次保存被拒。Git 标签的导航参数 `aiOpen`（打开某文件的 AI 改动 diff）保留。
 
 ### 对外打开入口

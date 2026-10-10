@@ -20,6 +20,7 @@ import type { UpdateStatus, UploadView } from '../update/updater.js'
 import type { BetterSidebarStatus, BetterSidebarToggleOutput } from '../better-sidebar.js'
 import type { SidebarPrefs, SidebarPrefsPatch } from './sidebar-prefs.js'
 import type { AiChangeBase, AiChangesResult } from './ai-changes.js'
+import type { SubagentLiveResult, TeamTaskCreateInput, TeamTaskMutationResult, TeamTaskUpdateInput, WorkflowRunsResult } from './tasks.js'
 
 export type { RecentTerminal, TerminalView, ListResult, ReadResult, RemoteEntry, RemoveResult, SearchResult, UpdateStatus, UploadView }
 export type { BetterSidebarStatus, BetterSidebarToggleOutput, SidebarPrefs, SidebarPrefsPatch }
@@ -223,6 +224,14 @@ export interface MethodIO {
    * 本机会话 / 没有存档 / 存档超过上限时 base 为 null，浏览器退回相对 HEAD 比较。
    */
   aiChangeBase: [{ sessionId: string; path: string }, { base: AiChangeBase | null }]
+  /** 任务页：任务树（根 + 全部子代理）每个会话的实时活动摘要（宿主无子代理运行时则 available=false）。 */
+  tasksSubagentLive: [{ rootSessionId: string }, SubagentLiveResult]
+  /** 任务页：任务树内各会话发起的工作流 run（折叠会话事件里的 tool-workflow/* 事件）。 */
+  tasksWorkflowRuns: [{ rootSessionId: string }, WorkflowRunsResult]
+  /** 团队看板：新建任务（代表树根 Lead 调 agentTeams.createTask）。 */
+  teamsTaskCreate: [TeamTaskCreateInput, TeamTaskMutationResult]
+  /** 团队看板：修改任务（CAS；revision 过期返回 reason:'conflict'）。 */
+  teamsTaskUpdate: [TeamTaskUpdateInput, TeamTaskMutationResult]
 }
 
 export interface LocalListOutput {

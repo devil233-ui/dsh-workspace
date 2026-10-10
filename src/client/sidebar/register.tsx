@@ -27,6 +27,9 @@ import { FILES_KIND, TAKEOVER_FILES_ID, filesTakeover, manageFilesTakeover, onFi
 import { getSidebarPrefs, subscribeSidebarPrefs } from '../sidebar-prefs.js'
 import type { SidebarTabKey } from '../../wire/sidebar-prefs.js'
 import { FILE_ID, FILES_ID, GIT_ID, SSH_ID, TASKS_KIND } from './kinds.js'
+import { TasksTab } from '../tasks/TasksTab.js'
+import { createTasksHost } from '../tasks/host.js'
+import { installTasksAutoOpen } from '../tasks/auto-open.js'
 import { createSidebarOpener, registerOpenToolViews, setWorkspaceOpener } from './open-in-sidebar.js'
 import { setSidebarHost } from './host-bridge.js'
 import { turnCount, useAiChanges } from './ai-changes.js'
@@ -65,6 +68,8 @@ function Glyph(props: { size?: number; d: string }) {
 }
 const FOLDER_ICON = (p: { size?: number }) => createElement(Glyph, { ...p, d: 'M2 4.5h4l1.5 1.5H14v6.5H2z M10.5 9.5l1.5 1.5 1.5-1.5' })
 const SSH_ICON = (p: { size?: number }) => createElement(Glyph, { ...p, d: 'M2.5 3h11v10h-11z M4.5 6l2 2-2 2 M8 10.5h3' })
+const TASKS_ICON = (p: { size?: number }) =>
+  createElement(Glyph, { ...p, d: 'M3 4h2 M3 8h2 M3 12h2 M7 4h6 M7 8h6 M7 12h6' })
 const GIT_ICON = (p: { size?: number }) =>
   createElement(Glyph, { ...p, d: 'M5 3v10 M5 5.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z M5 13.5a1.5 1.5 0 1 0 0-3 M11 7.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z M11 7.5c0 2.5-6 1.5-6 4' })
 
@@ -126,6 +131,9 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
     right?.openResource?.(address, { revealIfOpened: true })
   }
   const inject = (sessionId: string) => ({ t, api, index, openResource, sessionId })
+  // 任务页用到的宿主客户端服务：每次调用现取并做结构探测（服务可能晚于本插件提供）。
+  const tasksHost = createTasksHost(ctx)
+
   // 侧栏打开入口（方案 3.6）：open_in_sidebar 工具卡片的执行 + 对外服务 dshWorkspace 的实现。
   const opener = createSidebarOpener({
     index,
@@ -335,6 +343,28 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
     } catch (error) {
       log('接管「文件」侧栏失败', error)
     }
+    // 任务页（方案 3.7）：正文需要宿主客户端服务（ctx.jobs / ctx.sessions / 打开子代理），用单独的 inject 带上 host。
+    toggled('tasks', t('side.tasks'), () => {
+      const off = tabs.register({
+        id: TASKS_KIND,
+        kind: TASKS_KIND,
+        priority: 'extension',
+        title: () => t('side.tasks'),
+        guide: [{ id: TASKS_KIND, order: 42, title: () => t('side.tasks'), description: () => t('side.tasksHint'), icon: TASKS_ICON }]
+      })
+      const tasksInject = (sessionId: string) => ({ t, api, host: tasksHost, sessionId })
+      const a = ctx.slots.inject('sidebar.right.pane.tab', () =>
+        ctx.slots.register({ name: 'sidebar.right.pane.tab', key: TASKS_KIND, inject: tasksInject as never }, TasksTab as never)
+      )
+      const b = ctx.slots.inject('sidebar.right.pane.tab.title', () =>
+        ctx.slots.register({ name: 'sidebar.right.pane.tab.title', key: TASKS_KIND }, TabTitle as never)
+      )
+      return () => {
+        b()
+        a()
+        off()
+      }
+    })
     toggled('ssh', t('side.ssh'), () => {
       const off = tabs.register({
         id: SSH_ID,
@@ -352,6 +382,36 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
     })
   })
 
+  // 新子代理 / 新后台任务出现时自动打开任务页（偏好 tasksAutoOpen，窄屏不开）。等 uiSession 出现再挂（见 registerConversationTabs 的同类说明）。
+  let offAutoOpen: () => void = () => undefined
+  try {
+    const fiber = c.inject(['uiSession'], (sub) => {
+      const current = (sub.get('uiSession') as { adapter?: { current?: CurrentSession } } | undefined)?.adapter?.current
+      if (current === undefined) return
+      sub.effect(
+        () =>
+          installTasksAutoOpen({
+            get: (name) => ctx.get(name),
+            currentSession: () => current.getSnapshot()?.key,
+            subscribeCurrent: (listener) => current.subscribe(listener),
+            open: () => {
+              const registry = ctx.get('sidebarRightTabs') as TabRegistry | undefined
+              if (typeof registry?.get === 'function' && registry.get(TASKS_KIND) === undefined) return
+              ;(ctx.get('sidebarRight') as SidebarRight | undefined)?.openTab?.(TASKS_KIND, { revealIfOpened: true })
+            },
+            log
+          }),
+        'dsh-workspace: tasks auto open'
+      )
+    })
+    offAutoOpen = () => {
+      if (typeof fiber === 'function') fiber()
+      else fiber.dispose()
+    }
+  } catch (error) {
+    log('安装任务页自动打开失败', error)
+  }
+
   let offConversation: () => void = () => undefined
   try {
     offConversation = registerConversationTabs(ctx, { t, api, index, openResource }, log)
@@ -365,6 +425,7 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
     offOpener()
     offPresent()
     offConversation()
+    offAutoOpen()
     if (timer !== undefined) clearTimeout(timer)
     offSessions?.()
     if (typeof seat === 'function') seat()

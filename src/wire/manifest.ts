@@ -8,6 +8,7 @@ import { PACKAGE, buildDescriptors, type Codec, type MethodName } from './contra
 import type { MethodIO } from './dto.js'
 import { ASSOC_MAX, ASSOC_MODES, ASSOC_VIEWERS, CUSTOM_CSS_MAX, LARGE_FILE_MB_MAX, LARGE_FILE_MB_MIN, RETIRED_SIDEBAR_TAB_KEYS, SESSION_ID_MAX, SIDEBAR_TAB_KEYS, SIDECHATS_MAX } from './sidebar-prefs.js'
 import { DIR_STAMPS_MAX, OPEN_URL_MAX, OPEN_WITH_MAX, OPEN_WITH_NAME_MAX } from './open-with.js'
+import { TEAM_TASK_ACTIONS } from './tasks.js'
 
 // 编译期保证 dto 的 MethodIO 与 contract 的 METHODS 一一对应，漏一个直接报错。
 type AssertSameKeys<A, B> = [Exclude<keyof A, B>, Exclude<B, keyof A>] extends [never, never]
@@ -172,6 +173,21 @@ const INPUTS: Record<MethodName, z.ZodType> = {
   openExternalUrl: z.object({ url: z.string().min(1).max(OPEN_URL_MAX) }).strict(),
   aiChanges: z.object({ sessionId: z.string().min(1).max(256) }).strict(),
   aiChangeBase: z.object({ sessionId: z.string().min(1).max(256), path: remotePath }).strict(),
+  tasksSubagentLive: z.object({ rootSessionId: z.string().min(1).max(256) }).strict(),
+  tasksWorkflowRuns: z.object({ rootSessionId: z.string().min(1).max(256) }).strict(),
+  teamsTaskCreate: z
+    .object({ rootSessionId: z.string().min(1).max(256), subject: z.string().trim().min(1).max(500), description: z.string().max(20_000).optional() })
+    .strict(),
+  teamsTaskUpdate: z
+    .object({
+      rootSessionId: z.string().min(1).max(256),
+      taskId: z.string().min(1).max(256),
+      expectedRevision: z.number().int().min(0),
+      action: z.enum(TEAM_TASK_ACTIONS),
+      subject: z.string().trim().min(1).max(500).optional(),
+      description: z.string().max(20_000).optional()
+    })
+    .strict()
 }
 
 /** 「侧边栏」偏好的局部更新：严格模式，未知字段直接拒绝（防止浏览器把任意数据写进偏好文件）。 */
