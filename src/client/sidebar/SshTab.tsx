@@ -1,11 +1,16 @@
 /*
- * @Description: 右侧栏「SSH 终端」标签 —— 连到当前远程工作区的主机，初始目录为工作区根
+ * @Description: 右侧栏「SSH 终端」标签 —— 默认连到当前远程工作区的主机、初始目录为工作区根；导航参数可指定主机
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/sidebar/SshTab.tsx
+ *
+ * 导航参数（sidebarRight.openTab / tab.actions.openTab 的 params）：{ hostId?, cwd?, title? }，见 terminal-takeover.tsx 的 parseSshParams。
+ * 远程会话里「新建终端」卡片就是带着当前工作区的 hostId + cwd 打开本标签；没有 hostId 时回退到当前远程工作区，
+ * 本机会话又没指定主机时保持原来的「不是远程工作区」提示。
  */
 import { useEffect, useState } from 'react'
 import { TerminalView } from '../terminal/TerminalView.js'
 import type { SidebarBodyProps, SidebarTabInfo } from './RemoteFileTab.js'
+import { parseSshParams, sshTarget } from './terminal-takeover.js'
 
 /**
  * 右侧栏标签 id → 宿主终端 id。标签隐藏 / 切换时组件会卸载重挂，
@@ -19,19 +24,22 @@ export function SshTab(props: SidebarBodyProps) {
   const info = (props.useTabInfo as () => SidebarTabInfo)()
   const [, setVersion] = useState(0)
   useEffect(() => index.subscribe(() => setVersion((v) => v + 1)), [index])
-  const workspace = index.bySession(sessionId)
+  const target = sshTarget(parseSshParams(info.tab.navigation?.params), index.bySession(sessionId))
+  const hostId = target?.hostId
+  const cwd = target?.cwd
+  const title = target?.title
   const [terminalId, setTerminalId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [exited, setExited] = useState(false)
   const [nonce, setNonce] = useState(0)
 
   useEffect(() => {
-    if (workspace === undefined) return
+    if (hostId === undefined) return
     const key = `${info.tab.id}#${nonce}`
     let pending = terminalsByTab.get(key)
     if (pending === undefined) {
       pending = api
-        .call('openTerminal', { hostId: workspace.hostId, cols: 100, rows: 30, cwd: workspace.remotePath, title: workspace.title })
+        .call('openTerminal', { hostId, cols: 100, rows: 30, ...(cwd !== undefined ? { cwd } : {}), ...(title !== undefined ? { title } : {}) })
         .then((view) => view.id)
       terminalsByTab.set(key, pending)
       pending.catch(() => terminalsByTab.delete(key))
@@ -44,9 +52,9 @@ export function SshTab(props: SidebarBodyProps) {
     return () => {
       alive = false
     }
-  }, [api, info.tab.id, nonce, workspace])
+  }, [api, info.tab.id, nonce, hostId, cwd, title])
 
-  if (workspace === undefined) return <div className="dshws-side-note">{t('side.notRemote')}</div>
+  if (hostId === undefined) return <div className="dshws-side-note">{t('side.notRemote')}</div>
   if (error !== null) {
     return (
       <div className="dshws-side-note" data-tone="error">

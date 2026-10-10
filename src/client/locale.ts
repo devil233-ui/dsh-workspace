@@ -649,6 +649,10 @@ const zh: Record<string, string> = {
   'sidechat.gone': '该侧边对话已不存在（可能已被删除）。',
   'sidechat.boundaryHint': '侧边对话：上方历史只作参考，输入框已预填边界说明，接着写你的问题即可；回答不会回到主对话。',
   'sidechat.hideHint': '收起提示',
+  // 远程会话的「新建终端」引导卡片（接管后改开插件 SSH 终端）
+  'termTakeover.title': '终端（SSH · {host}）',
+  'termTakeover.desc': '在远程工作区 {path} 打开 SSH 终端',
+  'termTakeover.shell': 'SSH · {host}',
   // 任务页（方案 3.7）
   'side.tasks': '任务',
   'side.tasksHint': '后台任务、子代理拓扑、工作流与团队看板',
@@ -1406,6 +1410,10 @@ const en: Record<string, string> = {
   'sidechat.gone': 'This side chat no longer exists (it may have been deleted).',
   'sidechat.boundaryHint': 'Side chat: the history above is reference only. The composer is prefilled with a boundary note — just add your question. Answers never go back to the main conversation.',
   'sidechat.hideHint': 'Hide hint',
+  // “New terminal” guide card in remote sessions (opens the plugin SSH terminal)
+  'termTakeover.title': 'Terminal (SSH · {host})',
+  'termTakeover.desc': 'Open an SSH terminal in the remote workspace {path}',
+  'termTakeover.shell': 'SSH · {host}',
   // Tasks page
   'side.tasks': 'Tasks',
   'side.tasksHint': 'Background jobs, subagent topology, workflows and team board',

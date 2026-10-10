@@ -34,6 +34,7 @@ import { createSidebarOpener, registerOpenToolViews, setWorkspaceOpener } from '
 import { setSidebarHost } from './host-bridge.js'
 import { turnCount, useAiChanges } from './ai-changes.js'
 import { registerSidechat } from '../sidechat/register.js'
+import { registerSshTabType, registerTerminalTakeover } from './terminal-takeover.js'
 
 interface TabRegistry {
   register(definition: {
@@ -367,14 +368,19 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
       }
     })
     toggled('ssh', t('side.ssh'), () => {
-      const off = tabs.register({
-        id: SSH_ID,
-        kind: SSH_ID,
-        multiple: true,
-        priority: 'extension',
-        title: () => t('side.ssh'),
-        guide: [{ id: SSH_ID, order: 41, title: () => t('side.ssh'), description: () => t('side.sshHint'), icon: SSH_ICON }]
-      })
+      // 标签类型始终保留（接管后的「新建终端」卡片要打开它），只有引导卡片随接管开关显隐，见 registerSshTabType。
+      const off = registerSshTabType(
+        (showGuide) =>
+          tabs.register({
+            id: SSH_ID,
+            kind: SSH_ID,
+            multiple: true,
+            priority: 'extension',
+            title: () => t('side.ssh'),
+            ...(showGuide ? { guide: [{ id: SSH_ID, order: 41, title: () => t('side.ssh'), description: () => t('side.sshHint'), icon: SSH_ICON }] } : {})
+          }),
+        log
+      )
       const offSlots = slots(SSH_ID, SshTab)
       return () => {
         offSlots()
@@ -427,7 +433,16 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
   } catch (error) {
     log('注册侧边对话失败', error)
   }
+  // 远程会话的「新建终端」引导卡片改开插件 SSH 终端（偏好 remoteSshTerminal；本机会话原样渲染宿主卡片）。
+  let offTerminal: () => void = () => undefined
+  try {
+    offTerminal = registerTerminalTakeover(ctx, { t, api, index }, log)
+  } catch (error) {
+    log('接管远程会话的终端入口失败', error)
+  }
+
   return () => {
+    offTerminal()
     offSidechat()
     setSidebarHost(undefined)
     offToolViews()
