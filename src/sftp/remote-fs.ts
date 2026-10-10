@@ -657,13 +657,26 @@ export class RemoteFs {
 
   // ---------------------------------------------------------------- 流
 
-  /** 打开下载流。只允许普通文件（包括指向普通文件的符号链接）。 */
-  async openDownload(hostId: string, file: string): Promise<{ stream: Readable; size: number; name: string }> {
+  /**
+   * 打开下载流。只允许普通文件（包括指向普通文件的符号链接）。
+   * pickRange：拿到文件大小后决定读取区间（HTTP Range，音视频拖动进度用）；返回 undefined 读整个文件。
+   */
+  async openDownload(
+    hostId: string,
+    file: string,
+    pickRange?: (size: number) => { start: number; end: number } | undefined
+  ): Promise<{ stream: Readable; size: number; name: string; range?: { start: number; end: number } }> {
     const target = normalizeRemotePath(file)
     const sftp = await this.sftp(hostId)
     const attrs = await call<SftpAttrs>((cb) => sftp.stat(target, cb))
     if (typeOfMode(attrs.mode) !== 'file') throw new Error('只能下载普通文件。')
-    return { stream: sftp.createReadStream(target), size: attrs.size, name: posix.basename(target) }
+    const range = pickRange?.(attrs.size)
+    return {
+      stream: sftp.createReadStream(target, range === undefined ? undefined : { start: range.start, end: range.end }),
+      size: attrs.size,
+      name: posix.basename(target),
+      ...(range !== undefined ? { range } : {})
+    }
   }
 
   /**

@@ -166,7 +166,7 @@ export interface MethodIO {
   /** 全部远程工作区（侧边栏据此判断某个会话是不是远程工作区）。 */
   remoteWorkspaces: [Record<string, never>, { workspaces: RemoteWorkspaceView[] }]
   /** 为远程文件签发预览地址（令牌绑定该文件所在的远程工作区根目录）。 */
-  previewUrl: [{ hostId: string; path: string }, { url: string }]
+  previewUrl: [{ hostId: string; path: string; trusted?: boolean }, { url: string }]
   /** 远程 Git 面板：所有 git 操作经此一个入口（按 op 区分）。 */
   git: [GitInput, unknown]
   /** 自动解锁开关；开启时需要主密码。 */
@@ -189,6 +189,10 @@ export interface MethodIO {
    * 卡片 ▾ 菜单的请求只带「会话 + 事件序号 + 文件下标」，浏览器据此决定接管还是交还宿主。
    */
   presentedFile: [{ sessionId: string; seq: number; index: number }, { remote: { hostId: string; remotePath: string } | null }]
+  /** 本机任意路径只读（文本，超过 maxReadBytes 截断）；路径为原生绝对路径或本地 POSIX 形式，返回本地 POSIX 形式。写入仍走 sftpWrite（local:<会话> 限工作区内）。 */
+  localRead: [{ path: string }, ReadResult]
+  /** 本机任意路径只读（字节，base64，上限 8MB）。 */
+  localReadData: [{ path: string }, { path: string; size: number; mtime: number; base64: string }]
 }
 
 export interface LocalListOutput {

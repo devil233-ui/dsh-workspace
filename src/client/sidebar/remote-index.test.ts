@@ -4,7 +4,7 @@
  * @FilePath: /dsh-workspace/src/client/sidebar/remote-index.test.ts
  */
 import { describe, expect, it } from 'vitest'
-import { RemoteIndex, displayPath, localFileAddress, normalizePosix, parseFileAddress, revealPlan, sessionFileAddress, toLocalPosix, toRemotePath } from './remote-index.js'
+import { RemoteIndex, displayPath, isInsideLocal, localFileAddress, localSessionAddress, normalizePosix, parseFileAddress, revealPlan, sessionFileAddress, toLocalPosix, toRemotePath } from './remote-index.js'
 import { centeredScrollTop } from './VirtualList.js'
 
 describe('显示文件位置：定位计划与滚动', () => {
@@ -145,5 +145,39 @@ describe('本地工作区（文件管理 / Git 仓库）', () => {
     expect(index.bySession('l')).toBeUndefined()
     // 本插件的远程文件查看器不认领本地文件（交给宿主 / 其他插件的查看器）
     expect(index.resolveAddress(localFileAddress('/C:/DshChat/proj/a.ts'))).toBeUndefined()
+  })
+})
+describe('本机文件地址（查看器统一）', () => {
+  it('session 范围：相对路径按 cwd 拼接，绝对路径原样；远程会话 / 会话根 / 无 cwd 的相对路径不认领', async () => {
+    const index = indexWith({ s1: { cwd: 'C:\\DshChat\\proj' }, r: { cwd: ws.localPath }, none: {} })
+    await index.refresh()
+    expect(index.resolveLocalAddress(sessionFileAddress('s1', 'src/a.ts'))).toEqual({ path: '/C:/DshChat/proj/src/a.ts', sessionId: 's1', cwd: 'C:\\DshChat\\proj' })
+    expect(index.resolveLocalAddress(sessionFileAddress('s1', 'D:/Downloads/a.pdf'))?.path).toBe('/D:/Downloads/a.pdf')
+    expect(index.resolveLocalAddress(sessionFileAddress('s1', 'src/../b.md'))?.path).toBe('/C:/DshChat/proj/b.md')
+    expect(index.resolveLocalAddress(sessionFileAddress('s1', ''))).toBeUndefined()
+    expect(index.resolveLocalAddress(sessionFileAddress('r', 'a.ts'))).toBeUndefined()
+    expect(index.resolveLocalAddress(sessionFileAddress('none', 'a.ts'))).toBeUndefined()
+  })
+
+  it('absolute 范围：本机任意路径认领，远程占位目录里的交给远程解析', async () => {
+    const index = indexWith({})
+    await index.refresh()
+    expect(index.resolveLocalAddress('dsh-resource://file/absolute/D:/x/a.png')).toEqual({ path: '/D:/x/a.png' })
+    expect(index.resolveLocalAddress('dsh-resource://file/absolute/home/me/a.md')).toEqual({ path: '/home/me/a.md' })
+    expect(index.resolveLocalAddress(localFileAddress(toLocalPosix(`${ws.localPath}\\a.ts`)))).toBeUndefined()
+  })
+
+  it('localSessionAddress 与宿主 fileAddressFor 一致：工作区内用相对路径，工作区外用绝对路径', () => {
+    expect(localSessionAddress('s1', 'C:\\DshChat\\proj', '/C:/DshChat/proj/src/a b.ts')).toBe(sessionFileAddress('s1', 'src/a b.ts'))
+    expect(localSessionAddress('s1', 'C:\\DshChat\\proj', '/D:/x/a.ts')).toBe(sessionFileAddress('s1', 'D:/x/a.ts'))
+    expect(localSessionAddress('s1', '/home/me/proj', '/home/me/proj/a.ts')).toBe(sessionFileAddress('s1', 'a.ts'))
+    expect(localSessionAddress('s1', undefined, '/home/me/a.ts')).toBe('dsh-resource://file/session/s1//home/me/a.ts')
+  })
+
+  it('isInsideLocal：Windows 不区分大小写，POSIX 区分；前缀相同的兄弟目录不算', () => {
+    expect(isInsideLocal('C:\\DshChat\\proj', '/c:/dshchat/PROJ/a.ts')).toBe(true)
+    expect(isInsideLocal('C:\\DshChat\\proj', '/C:/DshChat/project/a.ts')).toBe(false)
+    expect(isInsideLocal('/home/me', '/home/Me/a')).toBe(false)
+    expect(isInsideLocal('/home/me', '/home/me')).toBe(true)
   })
 })

@@ -5,7 +5,9 @@
  *
  *   GET /dsh-workspace/assets/<白名单文件>
  *
- * 只认白名单里的文件名，不拼接任意路径，天然没有目录穿越。
+ *   GET /dsh-workspace/assets/viewers/<子路径>   文件查看器（file-viewer / Markdown 增强）的按需分片与运行时资源
+ *
+ * 只认白名单里的文件名，不拼接任意路径，天然没有目录穿越；viewers 子树按扩展名放行并逐段校验（见 viewerAsset）。
  * 带 ETag，浏览器缓存后重复打开只有一次 304；客户端支持 gzip 时发预压缩的 .gz。
  */
 import { createReadStream, existsSync, statSync } from 'node:fs'
@@ -21,6 +23,44 @@ const ALLOWED: Record<string, string> = {
   'editor.worker.js': 'text/javascript; charset=utf-8'
 }
 
+/** 查看器资源（lib/assets/viewers/**，见 scripts/build-viewers.mjs）按扩展名给类型；不在表里的扩展名一律 404。 */
+const VIEWER_TYPES: Record<string, string> = {
+  js: 'text/javascript; charset=utf-8',
+  mjs: 'text/javascript; charset=utf-8',
+  json: 'application/json; charset=utf-8',
+  css: 'text/css; charset=utf-8',
+  wasm: 'application/wasm',
+  bcmap: 'application/octet-stream',
+  pfb: 'application/octet-stream',
+  ttf: 'font/ttf',
+  otf: 'font/otf',
+  woff: 'font/woff',
+  woff2: 'font/woff2'
+}
+
+/**
+ * 查看器资源子树：file-viewer 的 Worker / WASM / cMap / 字体与按需分片数量多、名字带哈希，不适合逐个白名单，
+ * 所以按「目录 + 扩展名」放行。逐段校验（不允许空段、.、..、反斜杠、NUL，解码后不得含 /），
+ * 拼出的路径再确认仍在 viewers 目录下 —— 与白名单同样没有目录穿越。
+ */
+export function viewerAsset(assetsDir: string, name: string): { file: string; type: string } | undefined {
+  if (!name.startsWith('viewers/')) return undefined
+  let segments: string[]
+  try {
+    segments = name.slice('viewers/'.length).split('/').map((s) => decodeURIComponent(s))
+  } catch {
+    return undefined
+  }
+  if (segments.length === 0 || segments.some((s) => s === '' || s === '.' || s === '..' || /[\\/\0:]/.test(s))) return undefined
+  const ext = (segments[segments.length - 1] as string).split('.').pop()?.toLowerCase() ?? ''
+  const type = Object.hasOwn(VIEWER_TYPES, ext) ? VIEWER_TYPES[ext] : undefined
+  if (type === undefined) return undefined
+  const base = path.join(assetsDir, 'viewers')
+  const file = path.join(base, ...segments)
+  if (!file.startsWith(base + path.sep)) return undefined
+  return { file, type }
+}
+
 export function createAssetsHandler(assetsDir: string, trustedHosts: () => readonly string[]) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (!isTrustedRequest(req as never, trustedHosts())) {
@@ -32,9 +72,10 @@ export function createAssetsHandler(assetsDir: string, trustedHosts: () => reado
       return
     }
     const name = new URL(req.url ?? '/', 'http://x').pathname.slice(ASSETS_PREFIX.length + 1)
-    const type = Object.hasOwn(ALLOWED, name) ? ALLOWED[name] : undefined
-    const file = path.join(assetsDir, name)
-    if (type === undefined || !existsSync(file)) {
+    const viewer = viewerAsset(assetsDir, name)
+    const type = viewer?.type ?? (Object.hasOwn(ALLOWED, name) ? ALLOWED[name] : undefined)
+    const file = viewer?.file ?? path.join(assetsDir, name)
+    if (type === undefined || !existsSync(file) || !statSync(file).isFile()) {
       res.writeHead(404).end()
       return
     }

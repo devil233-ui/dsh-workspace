@@ -24,6 +24,10 @@ export interface CodeEditorProps {
   fetchAsset: AssetFetcher
   /** 父组件拿到保存入口（工具栏按钮用）。 */
   registerSave: (save: (() => Promise<void>) | null) => void
+  /** 内容变化（父组件据此记录草稿，切回预览时渲染未保存的内容）。 */
+  onChange?: (value: string) => void
+  /** 创建后定位到的行（1 起；dshWorkspace.openFile 的 line）。 */
+  line?: number
 }
 
 /** rgb()/rgba() → #rrggbb。Monaco 主题颜色只认十六进制。 */
@@ -147,7 +151,10 @@ export function CodeEditor(props: CodeEditorProps) {
         editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
           void save().catch(() => undefined)
         })
-        model.onDidChangeContent(setDirty)
+        model.onDidChangeContent(() => {
+          setDirty()
+          if (latest.current.onChange !== undefined && model !== undefined) latest.current.onChange(model.getValue())
+        })
         latest.current.registerSave(save)
         setLanguages(languageOptions(monaco.languages.getLanguages()))
         const current = model
@@ -156,6 +163,11 @@ export function CodeEditor(props: CodeEditorProps) {
           setState((s) => ({ ...s, language: id }))
         }
         setState({ phase: 'ready', language })
+        if (typeof props.line === 'number' && props.line > 0) {
+          const line = Math.min(props.line, model.getLineCount())
+          editor.setPosition({ lineNumber: line, column: 1 })
+          editor.revealLineInCenter(line)
+        }
         if (!props.readOnly) editor.focus()
       })
       .catch((error: unknown) => {

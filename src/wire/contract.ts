@@ -63,8 +63,13 @@ export const METHODS = [
   'updateCheck',
   'updateInstall',
   'setFilesTakeover',
-  'presentedFile'
+  'presentedFile',
+  'localRead',
+  'localReadData',
 ] as const
+
+/** 本机任意路径只读的线上主机 id（与宿主 local/local-fs.ts 的 LOCAL_ANY_ID 一致；浏览器 bundle 不能 import 那个文件）。 */
+export const LOCAL_ANY_HOST = 'local:*'
 
 /** 经远程调用分段下发的编辑器资源。 */
 export const EDITOR_ASSETS = ['monaco.js', 'editor.worker.js'] as const

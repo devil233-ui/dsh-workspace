@@ -1,4 +1,4 @@
-﻿/*
+/*
  * @Description: 本地工作区文件操作 —— 与 RemoteFs 同一套接口，供「文件管理」「Git 仓库」在本地会话里使用
  * @Author: YangHeng
  * @Date: 2026-09-30 16:30:00
@@ -69,6 +69,96 @@ export class LocalPathError extends Error {
     super(message)
     this.name = 'LocalPathError'
   }
+}
+
+/**
+ * 只读「本机任意路径」的线上主机 id（下载 / 流式读取路由用；写入接口不认它）。
+ * 与 local:<sessionId> 同前缀，侧栏前端无需区分「读」的通道；会话推导根目录时 '*' 不是合法会话，写入自然失败。
+ */
+export const LOCAL_ANY_ID = 'local:*'
+
+/**
+ * 本机只读路径校验（localRead / localReadData / 只读下载共用）：
+ * 接受原生绝对路径（C:\x、C:/x、/home/x）或本地 POSIX 形式（/C:/x），返回规范化后的原生路径。
+ * 为什么只做词法校验、不限目录：方案约定「本机任意路径可读、写入仍限工作区」—— 聊天里的文件链接、present 卡片、
+ * @ 引用常指向工作区外（下载目录、桌面），这些只需能看；写入走 LocalFs.resolve 的 realpath 防逃逸。
+ * 仍拒绝：相对路径、NUL / 控制字符、Windows 的 UNC 与设备路径（\\server\share、\\?\、\\.\ —— 会触发网络访问或打开设备）。
+ */
+export function resolveReadablePath(input: string, platform: NodeJS.Platform = process.platform): string {
+  if (input === '' || /[\u0000-\u001f]/.test(input)) throw new LocalPathError(`非法路径：${JSON.stringify(input)}`)
+  if (platform === 'win32') {
+    let s = input.replace(/\//g, '\\')
+    // 本地 POSIX 形式 /C:/x → C:\x
+    if (/^\\[A-Za-z]:(\\|$)/.test(s)) s = s.slice(1)
+    if (s.startsWith('\\\\')) throw new LocalPathError('不支持网络 / 设备路径。')
+    if (!/^[A-Za-z]:\\/.test(s) && !/^[A-Za-z]:$/.test(s)) throw new LocalPathError(`不是本机绝对路径：${input}`)
+    return path.win32.resolve(s.length === 2 ? `${s}\\` : s)
+  }
+  if (!input.startsWith('/')) throw new LocalPathError(`不是本机绝对路径：${input}`)
+  return path.posix.resolve(input)
+}
+
+/** 读文本（前 maxBytes 字节；带二进制嗅探与 UTF-8 往返检查）。target 必须是已校验的原生路径。 */
+export async function readTextAt(target: string, maxBytes: number): Promise<ReadResult> {
+  const s = await stat(target)
+  if (!s.isFile()) throw new Error('只能预览普通文件。')
+  const limit = Math.min(s.size, maxBytes)
+  const buffer = Buffer.alloc(limit)
+  if (limit > 0) {
+    const handle = await open(target, 'r')
+    try {
+      await handle.read(buffer, 0, limit, 0)
+    } finally {
+      await handle.close()
+    }
+  }
+  const binary = buffer.subarray(0, BINARY_SNIFF_BYTES).includes(0)
+  return {
+    path: toLocalPosix(target),
+    size: s.size,
+    mtime: Math.floor(s.mtimeMs),
+    content: binary ? '' : buffer.toString('utf8'),
+    truncated: s.size > maxBytes,
+    binary,
+    lossy: !binary && !utf8RoundTrips(buffer, s.size > maxBytes)
+  }
+}
+
+/** 读整个文件为 base64；超过 maxBytes 直接拒绝（不静默截断）。 */
+export async function readDataAt(target: string, maxBytes: number): Promise<{ path: string; size: number; mtime: number; base64: string }> {
+  const s = await stat(target)
+  if (!s.isFile()) throw new Error('只能读取普通文件。')
+  if (s.size > maxBytes) throw new Error(`文件过大（${s.size} 字节，上限 ${maxBytes}）。`)
+  return { path: toLocalPosix(target), size: s.size, mtime: Math.floor(s.mtimeMs), base64: (await readFile(target)).toString('base64') }
+}
+
+/** 字节区间（含两端），供 HTTP Range 使用。 */
+export interface ByteRange {
+  start: number
+  end: number
+}
+
+/** 拿到文件大小后决定读取区间（HTTP Range）；返回 undefined 读整个文件。 */
+export type RangePicker = (size: number) => ByteRange | undefined
+
+/** 打开读取流（可选区间）。target 必须是已校验的原生路径。 */
+export async function openReadAt(target: string, pickRange?: RangePicker): Promise<{ stream: Readable; size: number; name: string; range?: ByteRange }> {
+  const s = await stat(target)
+  if (!s.isFile()) throw new Error('只能下载普通文件。')
+  const range = pickRange?.(s.size)
+  return {
+    stream: createReadStream(target, range === undefined ? {} : { start: range.start, end: range.end }),
+    size: s.size,
+    name: path.basename(target),
+    ...(range !== undefined ? { range } : {})
+  }
+}
+
+/** 本机任意路径的只读访问（不限工作区；见 resolveReadablePath 的说明）。 */
+export const localReader = {
+  readText: (p: string, maxBytes: number): Promise<ReadResult> => readTextAt(resolveReadablePath(p), maxBytes),
+  readData: (p: string, maxBytes: number) => readDataAt(resolveReadablePath(p), maxBytes),
+  openDownload: (p: string, pickRange?: RangePicker) => openReadAt(resolveReadablePath(p), pickRange)
 }
 
 /** 一个本地会话的工作区范围。 */
@@ -236,37 +326,11 @@ export class LocalFs {
   }
 
   async readText(id: string, file: string, maxBytes: number): Promise<ReadResult> {
-    const target = await this.resolve(id, file)
-    const s = await stat(target)
-    if (!s.isFile()) throw new Error('只能预览普通文件。')
-    const limit = Math.min(s.size, maxBytes)
-    const buffer = Buffer.alloc(limit)
-    if (limit > 0) {
-      const handle = await open(target, 'r')
-      try {
-        await handle.read(buffer, 0, limit, 0)
-      } finally {
-        await handle.close()
-      }
-    }
-    const binary = buffer.subarray(0, BINARY_SNIFF_BYTES).includes(0)
-    return {
-      path: toLocalPosix(target),
-      size: s.size,
-      mtime: Math.floor(s.mtimeMs),
-      content: binary ? '' : buffer.toString('utf8'),
-      truncated: s.size > maxBytes,
-      binary,
-      lossy: !binary && !utf8RoundTrips(buffer, s.size > maxBytes)
-    }
+    return readTextAt(await this.resolve(id, file), maxBytes)
   }
 
   async readData(id: string, file: string, maxBytes: number): Promise<{ path: string; size: number; base64: string }> {
-    const target = await this.resolve(id, file)
-    const s = await stat(target)
-    if (!s.isFile()) throw new Error('只能读取普通文件。')
-    if (s.size > maxBytes) throw new Error(`文件过大（${s.size} 字节，上限 ${maxBytes}）。`)
-    return { path: toLocalPosix(target), size: s.size, base64: (await readFile(target)).toString('base64') }
+    return readDataAt(await this.resolve(id, file), maxBytes)
   }
 
   /** 保存：mtime 冲突检测 + 同目录临时文件改名（写到符号链接指向的真实文件）+ 保留权限位。 */
@@ -426,11 +490,8 @@ export class LocalFs {
     return { root: baseLp, matches, truncated, timedOut }
   }
 
-  async openDownload(id: string, file: string): Promise<{ stream: Readable; size: number; name: string }> {
-    const target = await this.resolve(id, file)
-    const s = await stat(target)
-    if (!s.isFile()) throw new Error('只能下载普通文件。')
-    return { stream: createReadStream(target), size: s.size, name: path.basename(target) }
+  async openDownload(id: string, file: string, pickRange?: RangePicker): Promise<{ stream: Readable; size: number; name: string; range?: ByteRange }> {
+    return openReadAt(await this.resolve(id, file), pickRange)
   }
 
   async upload(id: string, dir: string, name: string, source: Readable, options: { overwrite: boolean }): Promise<{ path: string }> {

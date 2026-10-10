@@ -23,7 +23,7 @@ import { DEFAULT_IGNORE } from './sftp/ignore.js'
 import { insideRoot, previewUrl } from './preview-route.js'
 import { GitError, RemoteGit } from './git/remote-git.js'
 import { LocalBrowseError, listLocalDirectory, makeLocalDirectory } from './local/browse.js'
-import { fromLocalPosix, isLocalId, toLocalPosix } from './local/local-fs.js'
+import { fromLocalPosix, isLocalId, localReader, toLocalPosix } from './local/local-fs.js'
 import { LocalGit } from './local/local-git.js'
 import type { GitRepo } from './git/remote-git.js'
 import type { RemoteFs } from './sftp/remote-fs.js'
@@ -824,6 +824,20 @@ export class WorkspaceGateway extends RemoteService {
     })
   }
 
+  /**
+   * 本机任意路径只读（查看器打开工作区外的文件：聊天链接、交付卡片、@ 引用常指向下载目录 / 桌面）。
+   * 只读不写：写入仍走 sftpWrite（hostId = local:<会话>，LocalFs.resolve 限定工作区并 realpath 防逃逸）。
+   * 路径校验见 resolveReadablePath（拒绝相对 / UNC / 设备路径）；鉴权沿用宿主 /api 网关，不对未登录的局域网访问开放。
+   */
+  localRead(input: In<'localRead'>): Out<'localRead'> {
+    return this.guard(() => localReader.readText(input.path, this.rt.config.maxReadBytes))
+  }
+
+  /** 字节版（base64，整包进内存，所以与 sftpReadData 同一上限；大文件走 HTTP 下载路由的 local:*）。 */
+  localReadData(input: In<'localReadData'>): Out<'localReadData'> {
+    return this.guard(() => localReader.readData(input.path, 8 * 1024 * 1024))
+  }
+
   remoteWorkspaces(_: In<'remoteWorkspaces'>): Out<'remoteWorkspaces'> {
     return this.guard(() => ({
       workspaces: this.rt.bindings.list().map((b) => ({ localPath: b.localPath, hostId: b.hostId, remotePath: b.remotePath, title: b.title }))
@@ -844,7 +858,7 @@ export class WorkspaceGateway extends RemoteService {
         const roots = [scope.root, ...(await scope.extraRoots())]
         const root = roots.find((r) => insideRoot(toLocalPosix(r), toLocalPosix(native)))
         if (root === undefined) throw new Error(`该文件不在当前工作区内：${target}`)
-        return { url: previewUrl(this.rt.previews.grant(input.hostId, toLocalPosix(root)), target) }
+        return { url: previewUrl(this.rt.previews.grant(input.hostId, toLocalPosix(root), input.trusted === true), target) }
       }
       const hostId = this.requireHost(input.hostId)
       const bound = this.rt.bindings.list().filter((b) => b.hostId === hostId)
@@ -863,7 +877,7 @@ export class WorkspaceGateway extends RemoteService {
         }
       }
       if (root === undefined) throw new Error(`该文件不在任何远程工作区内：${target}`)
-      return { url: previewUrl(this.rt.previews.grant(hostId, root), target) }
+      return { url: previewUrl(this.rt.previews.grant(hostId, root, input.trusted === true), target) }
     })
   }
 

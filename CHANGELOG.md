@@ -4,6 +4,24 @@
 
 ## 未发布
 
+### 文件查看器
+
+- 新增：文件查看器统一（本机会话 + 远程会话）。
+  - 右侧栏文件查看器同时认领本机文件：本机会话里的聊天文件链接、交付卡片、@ 引用都由插件查看器打开；卸载 dsh-better-sidebar 后 `absolute` 地址也有人认领。远程会话里解析不了的地址仍交还宿主。
+  - 「文件管理」窄面板里的本机文件改用会话范围地址（与宿主聊天链接同一写法），同一文件不会开出两个标签。
+  - 新增网关方法 `localRead` / `localReadData`：本机任意路径只读（带大小上限与 mtime；拒绝相对、UNC 与设备路径）。写入仍只走 `sftpWrite` + `local:<会话>`，限当前工作区（realpath 防逃逸）；工作区外的文件在查看器里只读。
+  - 下载路由支持 `HEAD` 与单区间 `Range`（206），`inline=1` 时图片 / 音视频 / PDF 按真实类型内联（HTML、SVG 永不内联）；`host=local:*` 为本机任意路径只读。
+- 新增：按扩展名分派查看器 —— 代码 = Monaco、Markdown / HTML = 增强预览、图片 / 音视频 = 原生（音视频走 Range 流，不受大小限制）、PDF / Word（docx、doc、odt）/ 表格（xlsx、xls、csv、ods）/ PPTX / 压缩包 / TIFF、HEIC = file-viewer；`.ppt`、CAD 只提供下载。超过大文件阈值（默认 20MB）的文件先提示再加载。文件关联、大文件阈值、HTML 沙箱默认值集中在 `src/client/viewers/defaults.ts`，经 `viewers/prefs.ts` 读取，可在「侧边栏」页签修改。
+- 新增：直接依赖 file-viewer（`@file-viewer/core` 与 pdf / word / spreadsheet / pptx / media / archive / image 渲染器，版本锁死 3.1.2），不含 CAD 与 `.ppt`。查看器资源（ESM 分片、Worker、WASM、cMap、字体）单独构建到 `lib/assets/viewers/`，经插件 `/dsh-workspace/assets` 路由托管，离线可用、按格式懒加载（`scripts/build-viewers.mjs`；`npm run verify:viewers` 在无头浏览器里实测 PDF / CSV / ZIP / Markdown 增强）。
+- 新增：Markdown 增强预览 —— 单栏「预览 / 代码」切换（与 HTML 的切换按钮一致；预览 = 渲染结果，代码 = Monaco 源码可编辑保存，切回预览即渲染未保存的草稿；默认模式按文件关联偏好，默认预览。原宽屏左右分栏实时预览已按反馈移除）；highlight.js 代码高亮、KaTeX 公式（MathML 输出）、Mermaid 图表（点击放大，滚轮缩放）全部按需加载；front matter 展示、浮动目录；选中文字出现「加入对话」，把引文写入对话输入框（宿主没有公开的插入接口，模拟粘贴实现，找不到输入框时复制到剪贴板）。仍是无脚本 iframe：增强内容在父文档离屏渲染后以静态 HTML / SVG 注入。
+- 新增：HTML 预览 / 源码双模式（源码可编辑保存）；默认沙箱，可「临时解除沙箱」（本次会话对该文件有效，需确认），解除时预览路由换用不带 CSP sandbox 的独立令牌。
+- 新增：`.doc` / `.dot`（Word 97-2003）在线预览 —— 不再滤掉 renderer-word 自带的 Word Binary 渲染器（`@file-viewer/doc` 3.1.2，MIT，纯 JS、无 Worker / WASM，按需分片），并将其列为精确版本的直接依赖；修复打开 .doc 时显示「.doc 格式已在支持矩阵中，但当前项目尚未装配 Word Binary renderer」。
+- 新增：已装配渲染器本就支持的格式补进默认关联（不增加体积）：odp、dotm、pptm、potm、ppsm、xlt、xltm、fods、dbf。
+- 变更：`.rtf` 改为按文本（Monaco）打开 —— renderer-word 的 RTF 需要额外的 rtf.js，本项目不装；压缩包内的 .rtf 同样按纯文本显示。
+- 新增：file-viewer 兜底渲染器（`src/client/viewers/lazy/fallback-renderers.ts`）—— 支持矩阵里未装配的类别（`.ppt` / `.pot`、CAD、3D、电子书等，定义复用 core 格式表）统一显示「该格式不支持在线预览，请下载后用系统应用打开」（中英文跟随查看器语言）；压缩包内的代码 / Markdown 等文本类别解码为纯文本（最多 2MB，含 NUL 字节视为二进制）。压缩包内预览与自定义关联都不再出现「尚未装配 xx renderer」的集成方提示。
+- 新增：分派白名单 `FILE_VIEWER_EXTS`（`src/client/viewers/dispatch.ts`，与装配的渲染器定义由单测校验一致）：用户把扩展名关联到 file-viewer、但该格式未装配时，文本类退回 Monaco，其余退回下载。
+- 文档：查看器第三方声明（`lib/assets/viewers/fv/NOTICE.md`，由 `scripts/build-viewers.mjs` 生成）补充 `@file-viewer/doc`（MIT）与 heic2any 内含 libheif（LGPL-3.0）的说明；`scripts/verify-viewers-browser.mjs` 新增兜底提示 / 纯文本兜底 / 不出现「尚未装配」检查，设置 `DSHWS_DOC_FIXTURE` 时另验证 .doc 正文渲染。
+
 ## 0.12.2（2026-10-09）
 
 - 新增：Git 对比视图默认折叠未改动的部分（与 VS Code 一致，只显示改动及上下 3 行，折叠处可点开）；标题栏「展开全部」开关可显示完整文件。

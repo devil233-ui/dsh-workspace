@@ -70,16 +70,21 @@ interface Grant {
   hostId: string
   /** 允许访问的远程根目录（工作区根）。 */
   root: string
+  /**
+   * 用户在查看器里「临时解除沙箱」时签发的令牌：响应不带 CSP sandbox，页面以 DSH 的源运行。
+   * 与普通令牌分开签发：沙箱里的页面只知道自己的普通令牌（就在它的 URL 里），无法据此拿到不沙箱的版本。
+   */
+  trusted: boolean
 }
 
-/** 令牌表：进程内存里，插件重载即全部失效。同一主机 + 根目录复用同一个令牌。 */
+/** 令牌表：进程内存里，插件重载即全部失效。同一主机 + 根目录（+ 是否信任）复用同一个令牌。 */
 export class PreviewGrants {
   private byToken = new Map<string, Grant>()
 
-  grant(hostId: string, root: string): string {
-    for (const [token, g] of this.byToken) if (g.hostId === hostId && g.root === root) return token
+  grant(hostId: string, root: string, trusted = false): string {
+    for (const [token, g] of this.byToken) if (g.hostId === hostId && g.root === root && g.trusted === trusted) return token
     const token = randomBytes(18).toString('base64url')
-    this.byToken.set(token, { hostId, root })
+    this.byToken.set(token, { hostId, root, trusted })
     return token
   }
 
@@ -164,7 +169,9 @@ export function createPreviewHandler(deps: PreviewDeps) {
       'Cache-Control': 'no-cache',
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'no-referrer',
-      'Content-Security-Policy': "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; object-src 'none'"
+      'Content-Security-Policy': grant.trusted
+        ? "object-src 'none'"
+        : "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; object-src 'none'"
     })
     if (req.method === 'HEAD') {
       opened.stream.destroy()

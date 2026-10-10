@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { Updater, type PluginManagerLike } from './update/updater.js'
 import { realpath } from 'node:fs/promises'
-import { LocalFs, sessionOfLocalId, type LocalScope } from './local/local-fs.js'
+import { LOCAL_ANY_ID, LocalFs, sessionOfLocalId, type LocalScope } from './local/local-fs.js'
 import { LocalGit } from './local/local-git.js'
 
 /** 插件运行时配置（与 index.ts 的 Config schema 对应）。 */
@@ -200,6 +200,8 @@ export function createRuntime(config: RuntimeConfig, overrides: RuntimeOverrides
    * 远程工作区的本地占位目录不算本地工作区 —— 那类会话一律走远程通道。
    */
   const localScope = async (id: string): Promise<LocalScope> => {
+    // local:* 是只读通道（localRead / 下载路由），不对应任何会话：明确拒绝，不把 '*' 交给宿主会话服务去查。
+    if (id === LOCAL_ANY_ID) throw new Error('本机任意路径通道只读，不能用于工作区操作。')
     const sessionId = sessionOfLocalId(id)
     let cwd = host.sessions?.get(sessionId)?.header?.cwd
     if (cwd === undefined) cwd = (await host.sessionPersistence?.stat(sessionId))?.header?.cwd

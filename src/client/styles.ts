@@ -110,7 +110,50 @@ export const CSS = `
 .dshws-side-banner { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px; color: var(--dsw-alias-state-warn-primary); }
 .dshws-side-frame { flex: 1 1 auto; min-height: 0; width: 100%; border: 0; background: #fff; }
 .dshws-side-image { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: 12px; }
-.dshws-side-image img { max-width: 100%; }
+.dshws-side-image img { max-width: 100%; cursor: zoom-in; }
+.dshws-side-image[data-natural="true"] img { max-width: none; cursor: zoom-out; }
+/* 文件查看器：Markdown 增强预览 / HTML 沙箱条 / file-viewer / 音视频 / 仅下载 */
+.dshws-md-preview, .dshws-html-preview, .dshws-fv { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.dshws-md-toc { position: absolute; top: 8px; right: 14px; z-index: 2; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-height: calc(100% - 16px); }
+.dshws-md-toc-btn {
+  width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--dsw-alias-border-l3); cursor: pointer;
+  background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-secondary); font-size: 13px; opacity: .85;
+}
+.dshws-md-toc-btn:hover { opacity: 1; }
+.dshws-md-toc-list {
+  display: flex; flex-direction: column; min-height: 0; overflow: auto; width: 220px; max-width: 70vw; padding: 4px 0;
+  background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--dsw-alias-border-l3); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18);
+}
+.dshws-md-toc-list button {
+  border: 0; background: transparent; text-align: left; padding: 4px 10px; font-size: 12px; cursor: pointer;
+  color: var(--dsw-alias-label-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dshws-md-toc-list button:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.dshws-md-quote {
+  position: absolute; z-index: 3; padding: 3px 10px; font-size: 12px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--dsw-alias-border-l3); background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary);
+  box-shadow: 0 4px 14px rgba(0,0,0,.18);
+}
+.dshws-md-notice {
+  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 3; padding: 4px 12px; font-size: 12px; border-radius: 6px;
+  background: var(--dsw-alias-label-primary); color: var(--dsw-alias-bg-layer-1);
+}
+.dshws-zoom { position: fixed; inset: 0; z-index: 10000; background: rgba(0,0,0,.6); display: flex; flex-direction: column; }
+.dshws-zoom-stage { flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; cursor: grab; touch-action: none; }
+.dshws-zoom-stage img { background: #fff; border-radius: 6px; user-select: none; transform-origin: center; }
+.dshws-zoom-bar { display: flex; justify-content: center; align-items: center; gap: 16px; padding: 8px; color: #fff; font-size: 12px; }
+.dshws-zoom-bar .dshws-link-btn { color: #fff; }
+.dshws-sandbox-bar { flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 3px 10px; font-size: 11px; color: var(--dsw-alias-label-tertiary); border-bottom: 1px solid var(--dsw-alias-border-l2); }
+.dshws-sandbox-bar[data-state="off"] { color: var(--dsw-alias-state-warn-primary); background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 10%, transparent); }
+.dshws-fv-host { flex: 1 1 auto; min-height: 0; position: relative; overflow: hidden; }
+.dshws-fv-host > * { height: 100%; }
+.dshws-media { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 12px; }
+.dshws-media video { max-width: 100%; max-height: 100%; background: #000; }
+.dshws-media audio { width: 100%; max-width: 520px; }
+.dshws-viewer-card { margin: 16px; padding: 14px 16px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 8px; font-size: 13px; color: var(--dsw-alias-label-secondary); }
+.dshws-viewer-card p { margin: 0 0 8px; line-height: 1.6; white-space: pre-wrap; }
+.dshws-viewer-card[data-tone="error"] p { color: var(--dsw-alias-state-error-primary); }
+.dshws-viewer-actions { display: flex; gap: 12px; }
 .dshws-side-tree { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 4px 0; }
 .dshws-side-row {
   display: flex; align-items: center; gap: 4px; width: 100%; border: 0; background: transparent; cursor: pointer;

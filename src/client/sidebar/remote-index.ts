@@ -52,6 +52,31 @@ export function localFileAddress(p: string): string {
   return `${FILE_ADDRESS_PREFIX}absolute/${native.split('/').map(enc).join('/')}`
 }
 
+/** 本地 POSIX 形式 → 宿主地址里的写法（正斜杠原生路径）：/C:/x/a → C:/x/a；/home/a 原样。 */
+export function nativeSlashPath(p: string): string {
+  return /^\/[A-Za-z]:(\/|$)/.test(p) ? p.slice(1) : p
+}
+
+/**
+ * 本机会话里文件的地址，规则与宿主 chat 的 fileAddressFor 一致（dsh-util-workspace-path）：
+ * 在会话工作区内 → 相对路径的 session 地址；工作区外 → 绝对路径的 session 地址。
+ * 与宿主一致的意义：同一文件从聊天链接与文件树打开得到同一个地址，右栏按地址去重，不会开出两个标签。
+ */
+export function localSessionAddress(sessionId: string, cwd: string | undefined, localPosixPath: string): string {
+  const normalized = nativeSlashPath(localPosixPath)
+  const root = cwd === undefined ? '' : cwd.replace(/\\/g, '/').replace(/\/+$/, '')
+  if (root !== '' && normalized === root) return sessionFileAddress(sessionId, '')
+  if (root !== '' && normalized.startsWith(`${root}/`)) return sessionFileAddress(sessionId, normalized.slice(root.length + 1))
+  return sessionFileAddress(sessionId, normalized)
+}
+
+/** 本机路径 p 是否在 root 内（含 root；Windows 风格不区分大小写）。两者可以是原生或本地 POSIX 形式。 */
+export function isInsideLocal(root: string, p: string): boolean {
+  const r = localKey(nativeSlashPath(toLocalPosix(root)))
+  const k = localKey(nativeSlashPath(toLocalPosix(p)))
+  return k === r || k.startsWith(`${r}/`)
+}
+
 /**
  * 本机路径的比较键：统一斜杠、去结尾斜杠。
  * 只有 Windows 风格路径（盘符 / UNC）忽略大小写 —— Linux 区分大小写，一律转小写会让只差大小写的两个工作区互相串。
@@ -216,6 +241,29 @@ export class RemoteIndex {
     }
     this.localCache.set(sessionId, view)
     return view
+  }
+
+  /**
+   * 本机文件地址 → 本机路径（本地 POSIX 形式）。远程工作区会话 / 远程占位目录里的地址返回 undefined（归 resolveAddress）。
+   * - session 范围：相对路径按该会话 cwd 拼接（cwd 未知时无法解析）；绝对路径原样。会话根目录本身（空路径）是目录，不认领。
+   * - absolute 范围：任意本机绝对路径（卸载 better-sidebar 后这类地址也要有人认领）。
+   * 返回的 sessionId / cwd 供查看器判断「是否在该会话工作区内、能否保存」。
+   */
+  resolveLocalAddress(address: string): { path: string; sessionId?: string; cwd?: string } | undefined {
+    const parsed = parseFileAddress(address)
+    if (parsed === undefined) return undefined
+    if (parsed.scope === 'session') {
+      if (parsed.path === '' || this.bySession(parsed.sessionId) !== undefined) return undefined
+      const cwd = this.sessionCwd(parsed.sessionId)
+      const p = parsed.path.replace(/\\/g, '/')
+      const absolute = p.startsWith('/') || /^[A-Za-z]:\//.test(p)
+      if (!absolute && (cwd === undefined || cwd === '')) return undefined
+      const joined = absolute ? p : `${(cwd as string).replace(/\\/g, '/').replace(/\/+$/, '')}/${p}`
+      return { path: normalizePosix(toLocalPosix(joined)), sessionId: parsed.sessionId, ...(cwd !== undefined && cwd !== '' ? { cwd } : {}) }
+    }
+    if (this.byLocalPath(parsed.path) !== undefined) return undefined
+    if (parsed.path.startsWith('//')) return undefined
+    return { path: normalizePosix(toLocalPosix(parsed.path)) }
   }
 
   /** 文件地址 → {工作区, 远程路径}；不属于远程工作区返回 undefined。 */

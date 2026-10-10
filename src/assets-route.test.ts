@@ -4,13 +4,13 @@
  * @FilePath: /dsh-workspace/src/assets-route.test.ts
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, request, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { gzipSync } from 'node:zlib'
-import { ASSETS_PREFIX, createAssetsHandler } from './assets-route.js'
+import { ASSETS_PREFIX, createAssetsHandler, viewerAsset } from './assets-route.js'
 import { utf8RoundTrips } from './sftp/remote-fs.js'
 
 describe('静态资源路由', () => {
@@ -71,6 +71,27 @@ describe('静态资源路由', () => {
     for (const p of ['secret.txt', '../package.json', '..%2Fpackage.json', 'monaco.js.gz', '']) {
       expect((await get(`${ASSETS_PREFIX}/${p}`)).status, p).toBe(404)
     }
+  })
+
+  it('查看器资源子树：按扩展名给类型，可多级目录', async () => {
+    mkdirSync(path.join(dir, 'viewers', 'fv', 'vendor', 'pdf'), { recursive: true })
+    writeFileSync(path.join(dir, 'viewers', 'file-viewer.js'), 'export {}')
+    writeFileSync(path.join(dir, 'viewers', 'fv', 'vendor', 'pdf', 'x.wasm'), 'w')
+    writeFileSync(path.join(dir, 'viewers', 'notes.txt'), 'nope')
+    const js = await get(`${ASSETS_PREFIX}/viewers/file-viewer.js?v=1`)
+    expect(js.status).toBe(200)
+    expect(js.headers['content-type']).toContain('text/javascript')
+    expect((await get(`${ASSETS_PREFIX}/viewers/fv/vendor/pdf/x.wasm`)).headers['content-type']).toBe('application/wasm')
+  })
+
+  it('【安全】查看器子树：未知扩展名、目录、穿越一律 404', async () => {
+    for (const p of ['viewers/notes.txt', 'viewers/fv', 'viewers/../secret.txt', 'viewers/..%2F..%2Fsecret.txt', 'viewers//file-viewer.js', 'viewers/a%5Cb.js']) {
+      expect((await get(`${ASSETS_PREFIX}/${p}`)).status, p).toBe(404)
+    }
+    // 直接调用（不经 URL 规范化）：编码过的 .. 与分隔符同样被拒。
+    expect(viewerAsset(dir, 'viewers/../../etc/passwd.js')).toBeUndefined()
+    expect(viewerAsset(dir, 'viewers/fv/%2E%2E/%2E%2E/x.js')).toBeUndefined()
+    expect(viewerAsset(dir, 'viewers/a%2F..%2F..%2Fx.js')).toBeUndefined()
   })
 
   it('【安全】跨站请求被围栏拒绝', async () => {

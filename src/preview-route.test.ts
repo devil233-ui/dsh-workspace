@@ -81,6 +81,16 @@ describe('预览路由', () => {
     expect((await get(previewUrl(token, '/home/ps/app/index.html'), { Host: 'evil.example' })).status).toBe(403)
   })
 
+  it('信任令牌（临时解除沙箱）：与普通令牌不同，响应不带 CSP sandbox', async () => {
+    const trusted = grants.grant('h1', '/home/ps/app', true)
+    expect(trusted).not.toBe(token)
+    const page = await get(previewUrl(trusted, '/home/ps/app/index.html'))
+    expect(page.status).toBe(200)
+    expect(String(page.headers['content-security-policy'])).not.toContain('sandbox')
+    // 普通令牌仍然沙箱
+    expect(String((await get(previewUrl(token, '/home/ps/app/index.html'))).headers['content-security-policy'])).toContain('sandbox')
+  })
+
   it('同一主机 + 根目录复用令牌；不同根目录不同令牌', () => {
     expect(grants.grant('h1', '/home/ps/app')).toBe(token)
     expect(grants.grant('h1', '/home/ps/other')).not.toBe(token)

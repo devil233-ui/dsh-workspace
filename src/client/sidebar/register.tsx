@@ -4,8 +4,8 @@
  * @FilePath: /dsh-workspace/src/client/sidebar/register.tsx
  *
  * - dsh-workspace:remote-file：文件查看器。pattern 比 better-sidebar 的 'dsh-resource://file/**' 更长，
- *   同为 extension 时按匹配长度胜出；canOpen 只认远程工作区会话里的地址，其余交还原处理方。
- *   —— 这就是「远程会话里点工具卡片的文件却去读 C:\home\...」的修复点。
+ *   同为 extension 时按匹配长度胜出；canOpen 认领远程工作区文件与本机文件（本机会话也由本插件查看器处理），
+ *   远程会话里解析不了的地址交还原处理方 —— 「远程会话里点工具卡片的文件却去读 C:\home\...」的修复点仍在 resolveAddress。
  * - dsh-workspace:remote-files：远程文件树（页面标签，出现在右侧栏引导列表）。
  * - dsh-workspace:ssh：SSH 终端（可开多个）。
  *
@@ -165,11 +165,15 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
         id: FILE_ID,
         kind: FILE_ID,
         priority: 'extension',
+        // pattern 必须比 'dsh-resource://file/**'（宿主 / better-sidebar 的通配）更长：同为 extension 档时按 pattern 长度胜出。
         patterns: ['dsh-resource://file/session/**', 'dsh-resource://file/absolute/**'],
-        canOpen: (address) => index.resolveAddress(address) !== undefined,
+        // 远程文件与本机文件都认领：本机会话里的聊天文件链接、present 卡片、@ 引用统一由本插件的查看器打开；
+        // 卸载 better-sidebar 后 absolute 地址也有人认领。解析不了的（远程会话里的非工作区 Windows 路径、会话根目录）交还宿主。
+        // 「文件查看器」开关关闭时一律不认领，文件交还宿主（或其他插件）的查看器；保持注册是为了开关切回时无需重注册。
+        canOpen: (address) =>
+          getSidebarPrefs().tabs.viewer && (index.resolveAddress(address) !== undefined || index.resolveLocalAddress(address) !== undefined),
         title: (address) => {
-          const r = index.resolveAddress(address)
-          const p = r?.remotePath ?? address
+          const p = index.resolveAddress(address)?.remotePath ?? index.resolveLocalAddress(address)?.path ?? address
           return p.slice(p.lastIndexOf('/') + 1) || p
         }
       })

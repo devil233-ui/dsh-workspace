@@ -82,6 +82,13 @@ const password = z.string().min(1).max(1024)
 const remotePath = z.string().min(1).max(4096).startsWith('/')
 /** 单段文件名。 */
 const fileName = z.string().trim().min(1).max(255)
+/** 本机绝对路径（C:\x、C:/x、/C:/x、/home/x）：外形在这里挡，平台相关规则在 resolveReadablePath 里。 */
+const localAbsPath = z
+  .string()
+  .min(1)
+  .max(4096)
+  .regex(/^(?:\/|[A-Za-z]:[\\/])/, '必须是本机绝对路径')
+  .refine((s) => !s.includes('\0'), '路径不能包含 NUL')
 
 const INPUTS: Record<MethodName, z.ZodType> = {
   state: empty,
@@ -137,7 +144,8 @@ const INPUTS: Record<MethodName, z.ZodType> = {
   setTakeover: z.object({ enabled: z.boolean() }),
   createRemoteWorkspace: z.object({ hostId: id, remotePath, title: z.string().trim().min(1).max(120) }),
   remoteWorkspaces: z.object({}),
-  previewUrl: z.object({ hostId: id, path: remotePath }),
+  // trusted：查看器「临时解除沙箱」—— 签发不带 CSP sandbox 的独立令牌（见 preview-route.ts 的 Grant.trusted）。
+  previewUrl: z.object({ hostId: id, path: remotePath, trusted: z.boolean().optional() }),
   git: gitSchema(),
   setAutoUnlock: z.object({ enabled: z.boolean(), password: z.string().max(1024).optional() }),
   // 本地路径是否绝对、是否规范由 local/browse.ts 校验（Windows 与 POSIX 规则不同）。
@@ -151,7 +159,10 @@ const INPUTS: Record<MethodName, z.ZodType> = {
     z.object({ source: z.literal('upload'), token: z.string().uuid() })
   ]),
   setFilesTakeover: z.object({ enabled: z.boolean() }),
-  presentedFile: z.object({ sessionId: z.string().min(1).max(256), seq: z.number().int().nonnegative(), index: z.number().int().min(0).max(1000) })
+  presentedFile: z.object({ sessionId: z.string().min(1).max(256), seq: z.number().int().nonnegative(), index: z.number().int().min(0).max(1000) }),
+  // 本机只读：是否绝对、是否 UNC / 设备路径由 local-fs.ts 的 resolveReadablePath 按平台校验。
+  localRead: z.object({ path: localAbsPath }),
+  localReadData: z.object({ path: localAbsPath }),
 }
 
 /** 远程 Git 各操作的输入校验（路径是否在仓库内由 RemoteGit 再校验一次）。 */
