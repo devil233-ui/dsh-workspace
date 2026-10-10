@@ -55,6 +55,10 @@ interface SidebarRight {
   openResource?(address: string, options?: { params?: unknown; revealIfOpened?: boolean }): void
   /** 按类型打开页面标签（宿主 sidebarRight.openTab），params 进入该标签的导航参数。 */
   openTab?(kind: string, options?: { params?: unknown; revealIfOpened?: boolean }): void
+  /** 某会话已打开的标签（控制器方法，不在公开类型里，按结构探测）。 */
+  tabsIn?(sessionId: string): ReadonlyArray<{ kind?: string }>
+  /** 用户显式关闭某类标签前的回调（每个 kind 只能注册一个）。 */
+  registerCloseHandler?(kind: string, handler: (sessionId: string, tab: unknown) => void): () => void
 }
 
 const CONV_FILES_ID = 'dsh-workspace-remote-files'
@@ -404,7 +408,19 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
             open: () => {
               const registry = ctx.get('sidebarRightTabs') as TabRegistry | undefined
               if (typeof registry?.get === 'function' && registry.get(TASKS_KIND) === undefined) return
-              ;(ctx.get('sidebarRight') as SidebarRight | undefined)?.openTab?.(TASKS_KIND, { revealIfOpened: true })
+              // 为什么不再 revealIfOpened: true：已打开时会切换激活抢焦点。宿主对页面标签会忽略该参数，
+              // 真正的「不抢激活」靠 isTabOpen 先判断（已打开就根本不调 openTab）。
+              ;(ctx.get('sidebarRight') as SidebarRight | undefined)?.openTab?.(TASKS_KIND, { revealIfOpened: false })
+            },
+            isTabOpen: (sessionId) => {
+              const right = ctx.get('sidebarRight') as SidebarRight | undefined
+              if (typeof right?.tabsIn !== 'function') return undefined
+              return right.tabsIn(sessionId).some((tab) => tab?.kind === TASKS_KIND)
+            },
+            subscribeClose: (listener) => {
+              const right = ctx.get('sidebarRight') as SidebarRight | undefined
+              if (typeof right?.registerCloseHandler !== 'function') return undefined
+              return right.registerCloseHandler(TASKS_KIND, (sessionId) => listener(sessionId))
             },
             log
           }),
