@@ -33,6 +33,7 @@ import { installTasksAutoOpen } from '../tasks/auto-open.js'
 import { createSidebarOpener, registerOpenToolViews, setWorkspaceOpener } from './open-in-sidebar.js'
 import { setSidebarHost } from './host-bridge.js'
 import { turnCount, useAiChanges } from './ai-changes.js'
+import { registerSidechat } from '../sidechat/register.js'
 
 interface TabRegistry {
   register(definition: {
@@ -419,7 +420,15 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
     log('注册会话顶部标签失败', error)
   }
 
+  // 侧边对话（方案 3.8）：受偏好开关控制，缺宿主能力时只记日志不出入口。
+  let offSidechat: () => void = () => undefined
+  try {
+    offSidechat = registerSidechat(ctx, { t, api }, log)
+  } catch (error) {
+    log('注册侧边对话失败', error)
+  }
   return () => {
+    offSidechat()
     setSidebarHost(undefined)
     offToolViews()
     offOpener()

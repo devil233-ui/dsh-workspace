@@ -111,6 +111,13 @@ export const IconTerminal = (p: IconProps) => (
     <path d="M4.5 6.2L6.8 8l-2.3 1.8M8.5 10h3" />
   </Svg>
 )
+/** 侧边对话：两个错开的对话气泡。 */
+export const IconSideChat = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M2.5 3.5h7a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H6l-2.5 2v-2h-1a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1z" />
+    <path d="M12.5 6.5h1a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1h-1v1.8L10.3 12.5H8a1 1 0 0 1-1-1" />
+  </Svg>
+)
 export const IconServer = (p: IconProps) => (
   <Svg {...p}>
     <rect x="2" y="2.5" width="12" height="4.5" rx="1.3" />
