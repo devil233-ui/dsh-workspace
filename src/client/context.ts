@@ -25,6 +25,8 @@ export interface SlotRegistration {
 export interface ClientContext {
   effect(factory: () => Disposer | void, label?: string): Disposer
   get(name: string): unknown
+  /** 提供 cordis 服务（随插件 fiber 释放）；旧宿主 / 测试替身可能没有。 */
+  provide?(name: string, value: unknown): unknown
   slots: {
     inject(name: string, factory: () => Disposer | void): Disposer
     register(options: SlotRegistration, component: ComponentType<never>): Disposer

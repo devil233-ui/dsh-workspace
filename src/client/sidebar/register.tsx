@@ -26,6 +26,8 @@ import { revealPlan } from './remote-index.js'
 import { FILES_KIND, TAKEOVER_FILES_ID, filesTakeover, manageFilesTakeover, onFilesTakeoverToggle, type FilesRegistry } from './files-takeover.js'
 import { getSidebarPrefs, subscribeSidebarPrefs } from '../sidebar-prefs.js'
 import type { SidebarTabKey } from '../../wire/sidebar-prefs.js'
+import { FILE_ID, FILES_ID, GIT_ID, SSH_ID, TASKS_KIND } from './kinds.js'
+import { createSidebarOpener, registerOpenToolViews, setWorkspaceOpener } from './open-in-sidebar.js'
 
 interface TabRegistry {
   register(definition: {
@@ -43,15 +45,11 @@ interface TabRegistry {
 }
 
 interface SidebarRight {
-  openResource?(address: string, options?: { revealIfOpened?: boolean }): void
+  openResource?(address: string, options?: { params?: unknown; revealIfOpened?: boolean }): void
   /** 按类型打开页面标签（宿主 sidebarRight.openTab），params 进入该标签的导航参数。 */
   openTab?(kind: string, options?: { params?: unknown; revealIfOpened?: boolean }): void
 }
 
-const FILE_ID = 'dsh-workspace:remote-file'
-const FILES_ID = 'dsh-workspace:remote-files'
-const SSH_ID = 'dsh-workspace:ssh'
-const GIT_ID = 'dsh-workspace:git'
 const CONV_FILES_ID = 'dsh-workspace-remote-files'
 const CONV_GIT_ID = 'dsh-workspace-remote-git'
 
@@ -107,6 +105,27 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
     right?.openResource?.(address, { revealIfOpened: true })
   }
   const inject = (sessionId: string) => ({ t, api, index, openResource, sessionId })
+  // 侧栏打开入口（方案 3.6）：open_in_sidebar 工具卡片的执行 + 对外服务 dshWorkspace 的实现。
+  const opener = createSidebarOpener({
+    index,
+    right: () => ctx.get('sidebarRight') as SidebarRight | undefined,
+    hasKind: (kind) => {
+      const tabs = ctx.get('sidebarRightTabs') as TabRegistry | undefined
+      if (tabs === undefined) return false
+      // 旧宿主的注册表没有 get：无法判断时照常打开（未注册的 kind 宿主自己忽略）。
+      return typeof tabs.get === 'function' ? tabs.get(kind) !== undefined : true
+    },
+    currentSession: () => (ctx.get('uiSession') as { adapter?: { current?: CurrentSession } } | undefined)?.adapter?.current?.getSnapshot()?.key,
+    // 接管了 DSH「文件」侧栏时打开接管的那个标签，避免同时出现两个文件树。
+    filesKind: () => (filesTakeover.status().state === 'active' ? FILES_KIND : FILES_ID)
+  })
+  const offOpener = setWorkspaceOpener(opener)
+  let offToolViews: () => void = () => undefined
+  try {
+    offToolViews = registerOpenToolViews(ctx, { t, opener: () => opener }, log)
+  } catch (error) {
+    log('注册 open_in_sidebar 工具卡片失败', error)
+  }
 
   // 交付卡片 ▾ 菜单：远程文件的「打开」→ 侧栏预览，「显示文件位置」→ 在「文件管理」里定位。
   let offPresent: () => void = () => undefined
@@ -316,6 +335,8 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
   }
 
   return () => {
+    offToolViews()
+    offOpener()
     offPresent()
     offConversation()
     if (timer !== undefined) clearTimeout(timer)

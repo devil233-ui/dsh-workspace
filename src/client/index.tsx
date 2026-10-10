@@ -15,6 +15,9 @@ import { readAwaiting, requestSection } from './page/update-flag.js'
 import { closeBridgeDrawer, holdSlotHead, shieldAddWorkspaceClicks, type SlotsPeek } from './workspace/bridge-compat.js'
 import { loadSidebarPrefs } from './sidebar-prefs.js'
 import { installAppearance } from './appearance.js'
+import { workspaceService } from './sidebar/open-in-sidebar.js'
+
+export type { DshWorkspaceService, OpenFileOptions, WorkspaceTabKind } from './sidebar/open-in-sidebar.js'
 
 export const name = 'dsh-workspace'
 
@@ -125,6 +128,15 @@ export function apply(ctx: ClientContext): void {
   void loadSidebarPrefs(api).catch((error: unknown) => console.warn('[dsh-workspace] 读取侧边栏偏好失败，按默认值运行', error))
   // 外观：IME 守卫 + 自定义 CSS。挂在 effect 上：插件卸载 / HMR 重载时撤销监听与样式节点。
   ctx.effect(() => installAppearance(), 'dsh-workspace: appearance')
+
+  // 对外客户端服务 dshWorkspace（openFile / openTab / reveal，方案 3.6）：其他插件 inject 或 ctx.get('dshWorkspace') 使用。
+  // 在入口直接 provide（早于右侧栏接入，与 better-sidebar 的 betterSidebar 服务同一写法），方法在右侧栏就绪前返回 false。
+  // 注意与宿主端同名的 cordis 服务无关：浏览器与宿主是两个独立的 cordis 实例，浏览器端调宿主走 remote.dshWorkspace。
+  try {
+    ctx.provide?.('dshWorkspace', workspaceService)
+  } catch (error) {
+    console.warn('[dsh-workspace] 提供客户端服务 dshWorkspace 失败', error)
+  }
 
   // 远程工作区的右侧栏：远程文件查看器 / 远程文件树 / SSH 终端。失败只记控制台，不影响其余功能。
   ctx.effect(() => {

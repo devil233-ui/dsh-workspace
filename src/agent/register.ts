@@ -1,12 +1,13 @@
 /*
- * @Description: 为远程会话的 Agent 注册同名工具（遮蔽内置实现），本地会话完全不受影响
+ * @Description: 为远程会话的 Agent 注册同名工具（遮蔽内置实现），本地会话只多一个 open_in_sidebar
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/agent/register.ts
  *
  * 机制（已用真实 ToolRuntime 验证，见 shadow.test.ts）：
  *   agent/created → 会话 cwd 反查绑定 → 是远程工作区才在该 Agent 的作用域注册同名工具。
  *   注册的定义 = 内置定义（参数、输出 schema、render、界面卡片原样保留）+ 替换后的 execute。
- *   本地会话不注册任何东西 → 工具清单与行为与未安装本插件时完全相同。
+ *   本地会话不接管任何内置工具 → 内置工具的清单与行为与未安装本插件时完全相同。
+ *   例外：open_in_sidebar（方案 3.6）本机 / 远程会话都注册（偏好可关），并遮蔽 BS 的 sidebar_open。
  *
  * 不用全局「当前主机」路由：dsh-remote 曾因此把 A 会话的命令打到 B 会话的机器上（其 issue #25）。
  */
@@ -32,6 +33,8 @@ import {
 import { UPLOAD_TOOL_NAME, uploadToolDefinition, type UploadDeps } from './upload-tool.js'
 import type { AttachmentService } from './upload-source.js'
 import { createRemotePresent, type PresentExec, type TurnBoundarySource } from './present-tool.js'
+import { openToolDefinition, type OpenToolDeps } from './open-tool.js'
+import { BS_OPEN_TOOL_NAME, OPEN_TOOL_NAME } from '../wire/open-in-sidebar.js'
 
 interface ToolDefinitionLike {
   name: string
@@ -66,6 +69,11 @@ export interface AgentToolsDeps {
   backendFor?: (binding: RemoteBinding) => AgentBackend
   /** 本机没有内置 bash 时用来定义远程 bash（运行时从宿主取 @deepseek-ai/dsh-tools 的 defineTool）。 */
   defineTool?: (definition: unknown) => unknown
+  /**
+   * open_in_sidebar 的开关（偏好 sidebar.openInSidebar）与变化订阅。不传（或没有 defineTool）则不注册，
+   * 此时本地会话仍保持「不注册任何东西」。
+   */
+  openInSidebar?: { enabled(): boolean; subscribe(listener: () => void): () => void }
 }
 
 /**
@@ -137,12 +145,89 @@ export function mountAgentTools(ctx: Context, deps: AgentToolsDeps): () => void 
     }
   }
 
+  // ---------------------------------------------------------------- open_in_sidebar（本机与远程会话都注册）
+  const openSwitch = deps.defineTool !== undefined ? deps.openInSidebar : undefined
+  /** 每个 Agent 的 open_in_sidebar 清理函数（撤销偏好订阅与注册）。 */
+  const openOffs = new Map<AgentLike, () => void>()
+  const openDeps: OpenToolDeps = {
+    resolveBinding: (cwd) => deps.bindings.resolve(cwd),
+    remoteStat: (binding, p) => backendFor(binding).stat(p)
+  }
+
+  /**
+   * 在 Agent 作用域注册 open_in_sidebar，并遮蔽 BS 的 sidebar_open（存在时）：
+   * 优先 restrict 从清单里去掉（模型只看到一个打开工具）；restrict 不可用 / 抛错时用同一实现同名注册遮蔽，
+   * 这样无论哪种情况都不会让 BS 的实现执行（它只会把请求排进 BS 自己的侧栏队列）。
+   * BS 不存在时什么也不做 —— restrict 未知工具名会抛错，所以先 get 再处理。
+   * 偏好 sidebar.openInSidebar 变化时即时注册 / 撤销（不用重开会话）。
+   */
+  const mountOpen = (agent: AgentLike, tools: ScopedTools): void => {
+    // inject 回调可能因 tools 服务重建而重跑：先清掉上一轮的订阅。
+    openOffs.get(agent)?.()
+    const define = deps.defineTool as (definition: unknown) => unknown
+    const register = (): (() => void) => {
+      const offs: Array<() => void> = [tools.register(define(openToolDefinition(openDeps)))]
+      if (tools.get(BS_OPEN_TOOL_NAME, agent) !== undefined) {
+        try {
+          offs.push(tools.restrict({ deny: [BS_OPEN_TOOL_NAME] }))
+        } catch {
+          try {
+            offs.push(tools.register(define(openToolDefinition(openDeps, BS_OPEN_TOOL_NAME))))
+          } catch (error) {
+            deps.rt.log.error('', 'agent', `遮蔽 ${BS_OPEN_TOOL_NAME} 失败`, error)
+          }
+        }
+      }
+      return () => {
+        for (const off of offs.reverse()) {
+          try {
+            off()
+          } catch {
+            /* 作用域已随 Agent 释放：注册已被一并撤下 */
+          }
+        }
+      }
+    }
+    let off: (() => void) | undefined
+    const sync = (): void => {
+      const on = openSwitch?.enabled() === true
+      if (on && off === undefined) {
+        try {
+          off = register()
+        } catch (error) {
+          deps.rt.log.error('', 'agent', `注册 ${OPEN_TOOL_NAME} 失败`, error)
+        }
+      } else if (!on && off !== undefined) {
+        off()
+        off = undefined
+      }
+    }
+    sync()
+    const unsubscribe = openSwitch?.subscribe(sync) ?? (() => undefined)
+    openOffs.set(agent, () => {
+      unsubscribe()
+      off?.()
+      off = undefined
+      openOffs.delete(agent)
+    })
+  }
+
   const attach = (agent: AgentLike): void => {
     if (scopes.has(agent)) return
     const binding = deps.bindings.resolve(agent.session?.header?.cwd)
-    if (binding === undefined) return
+    // 本机会话只有 open_in_sidebar 需要注册；它没启用（未传开关）时本机会话保持零注册。
+    if (binding === undefined && openSwitch === undefined) return
 
     const fiber = agent.ctx.inject(['tools'], (scoped) => {
+      if (openSwitch !== undefined) {
+        // 单独 try：这里抛错会让 cordis 回滚本回调里的全部注册（含远程工具接管）。
+        try {
+          mountOpen(agent, scoped.tools)
+        } catch (error) {
+          deps.rt.log.error(binding?.hostId ?? '', 'agent', `注册 ${OPEN_TOOL_NAME} 失败`, error)
+        }
+      }
+      if (binding === undefined) return
       const tools = scoped.tools
       const caps: ReadCaps = { limit: readLimitOf(tools.get('read', agent)), maxLineLength: 2000, maxBytes: 50 * 1024 }
       const env = envFor(binding, caps)
@@ -251,6 +336,7 @@ export function mountAgentTools(ctx: Context, deps: AgentToolsDeps): () => void 
     const fiber = scopes.get(agent)
     if (fiber === undefined) return
     scopes.delete(agent)
+    openOffs.get(agent)?.()
     void fiber.dispose()
   }
 

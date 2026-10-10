@@ -1,4 +1,4 @@
-﻿/*
+/*
  * @Description: dsh-workspace 宿主入口
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/index.ts
@@ -170,9 +170,20 @@ export function apply(ctx: Context, config: PluginConfig): void {
     }, 'dsh-workspace: session persistence')
   })
 
-  // P1：远程会话的 Agent 工具。只在会话 cwd 属于远程工作区时注册，本地会话零影响。
+  // P1：远程会话的 Agent 工具。只在会话 cwd 属于远程工作区时接管内置工具，本地会话零影响；
+  // 例外是 open_in_sidebar（本机 / 远程都注册，受「侧边栏」偏好 openInSidebar 控制，切换即时生效）。
   ctx.effect(
-    () => mountAgentTools(ctx, { rt: runtime, bindings: runtime.bindings, preimages: runtime.preimages, defineTool: defineTool as (d: unknown) => unknown }),
+    () =>
+      mountAgentTools(ctx, {
+        rt: runtime,
+        bindings: runtime.bindings,
+        preimages: runtime.preimages,
+        defineTool: defineTool as (d: unknown) => unknown,
+        openInSidebar: {
+          enabled: () => runtime.prefs.get().sidebar.openInSidebar,
+          subscribe: (listener) => runtime.prefs.subscribe(() => listener())
+        }
+      }),
     'dsh-workspace: agent tools'
   )
   inject(['systemPrompt'], (sub) => mountRemotePrompt(sub, runtime))

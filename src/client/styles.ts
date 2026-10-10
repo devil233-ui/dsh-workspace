@@ -94,6 +94,21 @@ export const CSS = `
 .dshws-side { display: flex; flex-direction: column; flex: 1 1 auto; height: 100%; min-height: 0; min-width: 0; }
 .dshws-side-note { padding: 16px; font-size: 13px; color: var(--dsw-alias-label-tertiary); }
 .dshws-side-note[data-tone="error"] { color: var(--dsw-alias-state-error-primary); }
+/* open_in_sidebar 工具卡片：一行（图标 · 标题 · 类型 · 目标 · 状态 · 再次打开），目标过长省略 */
+.dshws-oisb { font-size: 13px; color: var(--dsw-alias-label-secondary); min-width: 0; }
+.dshws-oisb-row { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 2px 0; }
+.dshws-oisb-icon { display: inline-flex; flex-shrink: 0; color: var(--dsw-alias-label-tertiary); }
+.dshws-oisb-title { flex-shrink: 0; color: var(--dsw-alias-label-primary); }
+.dshws-oisb-kind { flex-shrink: 0; padding: 0 6px; border-radius: 4px; font-size: 12px; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary); }
+.dshws-oisb-target { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+.dshws-oisb-status { flex-shrink: 0; font-size: 12px; color: var(--dsw-alias-label-tertiary); }
+.dshws-oisb[data-state="error"] .dshws-oisb-status { color: var(--dsw-alias-state-error-primary); }
+.dshws-oisb-btn {
+  flex-shrink: 0; border: 1px solid var(--dsw-alias-border-l2); background: transparent; color: var(--dsw-alias-label-primary);
+  border-radius: 6px; padding: 1px 8px; font-size: 12px; cursor: pointer;
+}
+.dshws-oisb-btn:hover { background: var(--dsw-alias-bg-layer-2); }
+.dshws-oisb-error { margin: 2px 0 0 20px; font-size: 12px; color: var(--dsw-alias-state-error-primary); white-space: pre-wrap; word-break: break-word; }
 .dshws-side-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; flex-shrink: 0; border-bottom: 1px solid var(--dsw-alias-border-l2); }
 .dshws-side-title { flex: 1; min-width: 0; font-weight: 500; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dshws-side-path { flex-shrink: 0; padding: 2px 10px 4px; font-size: 11px; color: var(--dsw-alias-label-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

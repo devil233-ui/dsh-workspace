@@ -37,6 +37,14 @@
 
 - 不提供：底部 dock（输入框上方的终端 / 后台任务 / Git 改动面板，方案 3.9）—— 按用户决定取消，开发中的实现、页头开合按钮、「侧边栏」页签的「底部 dock」开关与偏好 `sidebar.tabs.dock` 均已删除。已有 `prefs.json` 里残留的 `tabs.dock` 读取时被忽略、下次保存不再写出；升级后仍开着的旧页面提交该键也不会让整次保存被拒。Git 标签的导航参数 `aiOpen`（打开某文件的 AI 改动 diff）保留。
 
+### 对外打开入口
+
+- 新增：Agent 工具 `open_in_sidebar`（参数 `target` 必填：绝对路径 / 相对会话 cwd 的路径 / http(s) 网址，`title` 可选），在调用方会话的右侧栏打开文件（插件查看器）、文件夹（「文件管理」中定位并展开）或网页（宿主浏览器标签）。
+  - 本机会话与远程会话都注册（受「侧边栏」页签的开关控制，切换即时生效，无需重开会话）；远程会话里路径按远程根解析并经 SFTP 区分文件 / 文件夹，盘符 / UNC 仍是本机，macOS / Linux 上根外的 `/` 开头路径按「本机存在且远端不存在」判为本机。返回值与 dsh-better-sidebar 的 `sidebar_open` 一致，远程目标另带 `remoteHost`。
+  - 在 Agent 作用域遮蔽 dsh-better-sidebar 的 `sidebar_open`（优先从工具清单中去掉，去不掉时以同一实现同名遮蔽；dsh-better-sidebar 不存在时不做任何事）。
+  - 打开在浏览器端执行：工具卡片（`tool.call.toolview`）看到调用由进行中变为成功时打开，按 callId 去重（内存 + sessionStorage），历史重放不会重复打开；**只在当前显示该会话的页面里生效**。卡片显示打开的类型与目标，可「再次打开」。
+- 新增：浏览器端客户端服务 `dshWorkspace`（`ctx.provide`，供其他插件使用）：`openFile(path, { line?, mode?: 'preview' | 'edit', sessionId? })`、`openTab('files' | 'git' | 'ssh' | 'tasks' | 'sidechat')`、`reveal(path)`，返回是否已交给侧栏。文件查看器支持 `line`（跳到该行并切到代码视图）与 `mode` 导航参数。
+
 ## 0.12.2（2026-10-09）
 
 - 新增：Git 对比视图默认折叠未改动的部分（与 VS Code 一致，只显示改动及上下 3 行，折叠处可点开）；标题栏「展开全部」开关可显示完整文件。

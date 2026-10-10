@@ -55,6 +55,10 @@ async function setup(options: {
   withPresent?: boolean
   /** sessionProjections 替身；不传则不提供该服务。 */
   projections?: object
+  /** 传入则启用 open_in_sidebar（初始开关值）。 */
+  openInSidebar?: boolean
+  /** 在全局层注册 BS 的 sidebar_open 替身（与 BS 实际一致：ctx.tools.register 全局）。 */
+  withBs?: boolean
 }) {
   const ctx = new Context()
   if (options.attachments !== undefined) {
@@ -206,12 +210,30 @@ async function setup(options: {
   const logs: string[] = []
   const push = (_h: string, _c: string, m: string) => logs.push(m)
   const rt = { log: { info: push, warn: push, error: push } } as unknown as WorkspaceRuntime
+  if (options.withBs === true) runtime.register(localTool('sidebar_open', { target: { type: 'string', required: true } }) as never)
+  let openOn = options.openInSidebar === true
+  const openListeners = new Set<() => void>()
+  const setOpen = (on: boolean): void => {
+    openOn = on
+    for (const l of openListeners) l()
+  }
   mountAgentTools(ctx as never, {
     rt,
     bindings,
     preimages: new PreimageStore(() => path.join(sandbox, 'pre')),
     backendFor: () => backend,
-    defineTool: defineTool as (d: unknown) => unknown
+    defineTool: defineTool as (d: unknown) => unknown,
+    ...(options.openInSidebar !== undefined
+      ? {
+          openInSidebar: {
+            enabled: () => openOn,
+            subscribe: (l: () => void) => {
+              openListeners.add(l)
+              return () => openListeners.delete(l)
+            }
+          }
+        }
+      : {})
   })
 
   const makeAgent = (cwd: string, id: string, events: unknown[] = []) => {
@@ -232,7 +254,7 @@ async function setup(options: {
       content: Array<{ text?: string }>
       isError?: boolean
     }>
-  return { ctx, tools: runtime, backend, binding, makeAgent, created, call, logs, builtinPresentCalls, presetKey: usePreset ? presetKey : undefined }
+  return { ctx, tools: runtime, backend, binding, makeAgent, created, call, logs, builtinPresentCalls, setOpen, openListeners, presetKey: usePreset ? presetKey : undefined }
 }
 
 describe('远程工具注册（真实 ToolRuntime + 真实先读后写策略）', () => {
@@ -542,6 +564,65 @@ describe('远程工具注册（真实 ToolRuntime + 真实先读后写策略）'
       const s = await setup({ withBash: true, withPresent: true, projections })
       await s.created(s.makeAgent(s.binding.localPath, 'pr-log'))
       expect(s.logs.some((m) => /已接管 Agent 工具：.*present/.test(m))).toBe(true)
+    })
+  })
+
+  describe('open_in_sidebar', () => {
+    const names = (s: { tools: { schemas(scope: never): Array<{ name: string }> } }, agent: object) =>
+      s.tools.schemas(agent as never).map((t) => t.name)
+
+    it('未传开关时本地会话零注册（与旧行为一致）', async () => {
+      const s = await setup({ withBash: true })
+      const local = s.makeAgent(sandbox, 'oisb-none')
+      await s.created(local)
+      expect(names(s, local)).not.toContain('open_in_sidebar')
+    })
+
+    it('本地与远程会话都注册；结果文本带可解析的 JSON 行；远程目标带 remoteHost', async () => {
+      const s = await setup({ withBash: true, openInSidebar: true })
+      const local = s.makeAgent(sandbox, 'oisb-local')
+      const remote = s.makeAgent(s.binding.localPath, 'oisb-remote')
+      await s.created(local)
+      await s.created(remote)
+      expect(names(s, local)).toContain('open_in_sidebar')
+      expect(names(s, remote)).toContain('open_in_sidebar')
+
+      const l = await s.call(local, 'open_in_sidebar', { target: '.' })
+      expect(l.isError).not.toBe(true)
+      expect(l.content[0]?.text).toContain('dsh-workspace:open {"kind":"folder"')
+
+      const r = await s.call(remote, 'open_in_sidebar', { target: 'README.md' })
+      expect(r.isError).not.toBe(true)
+      expect(r.content[0]?.text).toContain('"target":"/srv/app/README.md"')
+      expect(r.content[0]?.text).toContain('"remoteHost":"h1"')
+      // 远程工具接管不受影响。
+      expect(s.logs.some((m) => /远程会话已接管 Agent 工具：read, write, bash/.test(m))).toBe(true)
+    })
+
+    it('偏好关闭 → 撤销；重新打开 → 恢复（无需重开会话）；Agent 释放后取消订阅', async () => {
+      const s = await setup({ withBash: true, openInSidebar: false })
+      const local = s.makeAgent(sandbox, 'oisb-toggle')
+      await s.created(local)
+      expect(names(s, local)).not.toContain('open_in_sidebar')
+      s.setOpen(true)
+      expect(names(s, local)).toContain('open_in_sidebar')
+      s.setOpen(false)
+      expect(names(s, local)).not.toContain('open_in_sidebar')
+      s.setOpen(true)
+      ;(s.ctx as unknown as { emit(e: string, p: unknown): void }).emit('agent/disposed', { agent: local })
+      await new Promise((r) => setTimeout(r, 30))
+      expect(s.openListeners.size).toBe(0)
+    })
+
+    it('遮蔽 BS 的 sidebar_open：开启时从清单里去掉，关闭时恢复', async () => {
+      const s = await setup({ withBash: true, openInSidebar: true, withBs: true })
+      const local = s.makeAgent(sandbox, 'oisb-bs')
+      await s.created(local)
+      expect(names(s, local)).toContain('open_in_sidebar')
+      expect(names(s, local)).not.toContain('sidebar_open')
+      s.setOpen(false)
+      expect(names(s, local)).toContain('sidebar_open')
+      expect(names(s, local)).not.toContain('open_in_sidebar')
     })
   })
 
