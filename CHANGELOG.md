@@ -92,6 +92,10 @@
   - 打开在浏览器端执行：工具卡片（`tool.call.toolview`）看到调用由进行中变为成功时打开，按 callId 去重（内存 + sessionStorage），历史重放不会重复打开；**只在当前显示该会话的页面里生效**。卡片显示打开的类型与目标，可「再次打开」。
 - 新增：浏览器端客户端服务 `dshWorkspace`（`ctx.provide`，供其他插件使用）：`openFile(path, { line?, mode?: 'preview' | 'edit', sessionId? })`、`openTab('files' | 'git' | 'ssh' | 'tasks' | 'sidechat')`、`reveal(path)`，返回是否已交给侧栏。文件查看器支持 `line`（跳到该行并切到代码视图）与 `mode` 导航参数。
 
+### 文档
+
+- 文档：README（中英）移除「侧边栏依赖 dsh-better-sidebar」的过时说明，新增「侧边栏」章节与「与 dsh-better-sidebar 的关系」；GitHub Release 说明不再要求先装 dsh-better-sidebar；`cordis.patch.yml`、客户端入口注释与需求文档 / 开发计划中按 better-sidebar 设计的描述改为现状（宿主原生右栏）。
+
 ## 0.12.2（2026-10-09）
 
 - 新增：Git 对比视图默认折叠未改动的部分（与 VS Code 一致，只显示改动及上下 3 行，折叠处可点开）；标题栏「展开全部」开关可显示完整文件。

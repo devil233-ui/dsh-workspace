@@ -24,9 +24,9 @@ export const name = 'dsh-workspace'
 /**
  * 客户端半依赖：slots（注册入口与整页）、locale（双语）、remote（调用宿主）。
  *
- * better-sidebar 刻意不在这里：它是可选的第三方插件，硬依赖会让
- * 「只想连个服务器」的用户被一个无关插件卡住。侧边栏 tab 在 P1 用
- * ctx.get('betterSidebar') 动态探测后再注册。
+ * 右侧栏不在 inject 里：标签直接注册到宿主原生右栏（sidebarRightTabs），
+ * 由 registerRemoteSidebar 等该服务就绪后再注册，缺失时不影响主机管理页面与工作区能力。
+ * 不依赖 dsh-better-sidebar。
  */
 export const inject = ['slots', 'locale', 'remote']
 

@@ -1,4 +1,4 @@
-﻿# dsh-workspace
+# dsh-workspace
 
 [简体中文](./README.md) | English
 
@@ -14,6 +14,30 @@ A remote workspace plugin for DeepSeek Harness (DSH). It manages SSH hosts insid
 - **Updates**: check GitHub for the latest version and install it from the Settings tab (falls back to the npm registry), or upload an offline .tgz package
 - **Add workspace**: takes over DSH's "Add workspace" dialog, letting you pick a local folder (quick places + drives) or a folder on a remote host (grouped by host group)
 - **Remote Agent tools**: in a remote workspace session, the Agent's read / write / edit / glob / grep / bash run on the remote host; local sessions are unaffected
+- **Sidebar**: built directly into the native DSH right sidebar, for local and remote workspace sessions alike; see "Sidebar" below
+
+## Sidebar
+
+Everything in the right sidebar is registered by this plugin directly in the native DSH right sidebar; no other sidebar plugin is needed.
+
+- **Files**: file name search, automatic folder refresh, Git status colors (M / A / D / U badges and more), "Reference in chat" (@ references) in the context menu, "Open with" (system default app, VS Code / Cursor / Zed, custom URL templates), drag-and-drop upload (folders keep their structure), Ctrl / Shift multi-select with batch actions, "Compress and download" ZIP for a multi-selection
+- **File viewer**: file links in chat, deliverable cards and @ references all open in the plugin's viewer (local and remote files alike)
+  - Code / text: Monaco editor (Ctrl+S to save, conflict detection)
+  - Markdown: single-pane preview / code switch (code mode is editable and savable), with code highlighting, Mermaid, KaTeX math and a floating outline; selected text can be added to the chat
+  - HTML: preview / source modes, sandboxed by default, with a temporary sandbox unlock
+  - Other formats are rendered by file-viewer: PDF, Word (docx / doc / odt), spreadsheets (xlsx / xls / csv / ods), PPTX / ODP, audio / video, archives (zip) and more; `.ppt` and CAD cannot be previewed and are offered as downloads only; `.rtf` opens as text
+- **Git repository**: besides changes, diff and history, a new "AI changes" tab lists the files the model changed in this turn / the whole session and lets you diff them; suspected secrets in diffs are masked by default and can be revealed temporarily
+- **Tasks**: background jobs of the current task tree (live output, kill), subagents (tree / graph view), workflow runs and the team board; optionally opens automatically when a new subagent or background job appears
+- **Side chat**: fork the current conversation into a side chat in the right sidebar without interrupting the main one; deleting one from the thread list also removes it from the session list on the left (DSH archives it)
+- **Terminal**: in a remote workspace session, "New terminal" on the guide page opens the plugin's SSH terminal (connected to the workspace host, in the workspace folder); local sessions keep the DSH terminal unchanged. While this is on, the guide page no longer shows a separate "SSH terminal" card; turning it off brings the card back
+- **Entry points**
+  - Agent tool `open_in_sidebar`: opens a file, folder or web page in the right sidebar of the current session (remote sessions resolve remote paths)
+  - Browser-side client service `dshWorkspace` for other plugins: `openFile(path, { line?, mode? })`, `openTab(kind)`, `reveal(path)`
+- **Management page**: the "Remote workspace → Sidebar" tab manages all of the above: tab switches, file associations, ignore rules, large file threshold, default HTML sandbox, `open_in_sidebar` and task page auto-open, the plugin SSH terminal for remote workspaces, custom CSS and the IME guard
+
+### Relationship with dsh-better-sidebar
+
+This plugin now covers all sidebar features of [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) and no longer depends on it. Running both leads to overlapping features; disabling it with one click in the "Remote workspace → Sidebar" tab is recommended (it is only disabled, not uninstalled, and can be re-enabled at any time).
 
 ## Requirements
 
@@ -21,17 +45,8 @@ A remote workspace plugin for DeepSeek Harness (DSH). It manages SSH hosts insid
 | --- | --- |
 | DSH | `>= 0.1.5-rc.2` (both 0.1.x and 0.2.x; developed against DSH Desktop 2.0.16 / host 0.2.0-rc.1) |
 | Node.js | `>= 20` |
-| [DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) (npm package `dsh-better-sidebar`) | **The sidebar features depend on this plugin** (remote files, remote Git and SSH terminal in the right sidebar). Install and enable it first |
 
 ## Installation
-
-### 1. Install the sidebar plugin first
-
-```bash
-dsh plugin --profile <profile> add dsh-better-sidebar
-```
-
-### 2. Install dsh-workspace
 
 Install the latest version from npm (the command carries no version number and always resolves to the newest release):
 
@@ -67,7 +82,7 @@ dsh plugin --profile <profile> remove dsh-workspace
 2. Create a host (optionally in a group) and click "Test connection"
 3. Use the Hosts / Files / Terminals / Connection log tabs to manage hosts, browse files and open terminals
 4. Click DSH's "Add workspace" ("Take over Add workspace" in the Settings tab must be on; it is on by default), pick a remote host and folder to create a remote workspace
-5. Open "Files" and "Git repository" from the right sidebar in any session (local or remote workspace); remote workspace sessions also have "SSH terminal"
+5. Open "Files", "Git repository", "Tasks" and "Side chat" from the right sidebar in any session (local or remote workspace); remote workspace sessions also have "SSH terminal". Each tab can be switched on or off in the Sidebar tab
 6. The Settings tab also has the auto-unlock switch, version info and links such as the [changelog](./CHANGELOG.md) (in Chinese)
 
 ## Development
