@@ -228,13 +228,15 @@ export const CSS = `
 .dshws-git-row:hover { background: var(--dsw-alias-interactive-bg-hover); }
 .dshws-git-row .dshws-git-actions { display: none; gap: 2px; padding-right: 6px; }
 .dshws-git-row:hover .dshws-git-actions { display: inline-flex; }
+/* 整行可点的文件行（见 sidebar/row-activate.ts）：手型光标 + 键盘焦点框 */
+.dshws-git-row[role="button"] { cursor: pointer; }
+.dshws-git-row[role="button"]:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: -2px; }
 .dshws-git-confirm { display: inline-flex; align-items: center; gap: 4px; padding-right: 6px; font-size: 11px; color: var(--dsw-alias-state-warn-primary); white-space: nowrap; }
 .dshws-link-btn[data-tone="danger"] { color: var(--dsw-alias-state-error-primary); }
 .dshws-git-file {
   flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 3px 10px; border: 0; background: transparent;
   cursor: pointer; font-size: 13px; text-align: left; color: var(--dsw-alias-label-primary);
 }
-.dshws-git-commit-files .dshws-git-file:hover { background: var(--dsw-alias-interactive-bg-hover); }
 .dshws-git-status { width: 14px; flex-shrink: 0; font-family: ui-monospace, Consolas, monospace; font-size: 11px; font-weight: 700; text-align: center; }
 .dshws-git-status[data-s="M"] { color: #d29922; }
 .dshws-git-status[data-s="A"], .dshws-git-status[data-s="U"], .dshws-git-status[data-s="?"] { color: #3fb950; }
@@ -411,8 +413,28 @@ export const CSS = `
 .dshws-git-row { border-radius: 0; }
 .dshws-git-row .dshws-git-actions { gap: 0; padding-right: 4px; }
 .dshws-git-file { height: 26px; gap: 6px; padding: 0 10px; font-size: 13px; }
-.dshws-git-commit-files .dshws-git-file:hover, .dshws-git-row:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.dshws-git-row:hover { background: var(--dsw-alias-interactive-bg-hover); }
 .dshws-git-dir { margin-left: 2px; }
+
+/* Git：AI 改动页签（W 写入 / E 编辑 / D 删除 + 操作次数）与 diff 脱敏开关 */
+.dshws-st[data-s="W"] { --st: #16a34a; }
+.dshws-st[data-s="E"] { --st: #d08a00; }
+.dshws-git-tabs .dshws-count[data-tone="ai"] { color: var(--dsw-alias-state-business-primary); background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 14%, transparent); }
+.dshws-ai-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px 4px; }
+.dshws-ai-hint { padding: 0 10px 6px; font-size: 11px; line-height: 1.5; color: var(--dsw-alias-label-tertiary); }
+.dshws-git-row[data-selected="true"] { background: var(--dsw-alias-interactive-bg-hover); }
+.dshws-ai-ops {
+  margin-left: auto; flex-shrink: 0; padding: 0 6px; height: 16px; line-height: 16px; border-radius: 8px;
+  font-size: 10px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-3);
+}
+.dshws-diff-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dshws-diff-meta > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dshws-redact-toggle { margin-left: auto; }
+.dshws-tab-title { display: inline-flex; align-items: center; gap: 4px; }
+.dshws-tab-badge {
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; font-size: 10px; line-height: 16px; text-align: center;
+  color: var(--dsw-alias-state-business-primary); background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 14%, transparent);
+}
 
 /* 提交区 */
 .dshws-git-commit { gap: 8px; padding: 10px; border-bottom: 1px solid var(--dsw-alias-border-l2); }

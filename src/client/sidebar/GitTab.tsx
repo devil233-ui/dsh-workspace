@@ -10,6 +10,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { Split } from './Split.js'
+import { rowButtonProps } from './row-activate.js'
 import { NOTE_HEIGHT, ROW_HEIGHT, SECTION_HEIGHT, VirtualList } from './VirtualList.js'
 import { getDefaultRef, setDefaultRef } from './git-default.js'
 import { EmptyState, FileIcon, IconBack, IconBranch, IconButton, IconChevron, IconCloud, IconCommit, IconEye, IconFolder, IconMinus, IconPin, IconPlus, IconRefresh, IconSubmodule, IconTag, IconUndo, StatusBadge } from './ui.js'
@@ -27,9 +28,13 @@ import { copyText, relativeTo, showFloat, useContextMenu, type MenuItem } from '
 import { RenameInput, useRemoteFileMenu } from './file-menu.js'
 import { displayPath } from './remote-index.js'
 import { useLocalSupport } from './host-support.js'
+import { AiChangesView } from './AiChangesView.js'
+import { refreshAiChanges, repoRelative, turnCount, useAiChanges, type AiScope } from './ai-changes.js'
+import { redactSecrets, type RedactResult } from './redact.js'
+import type { AiChangeBase, AiChangedFile } from '../../wire/ai-changes.js'
 
-/** 未查看其他分支时的页签：与查看分支时一致，都是 文件 / 改动 / 历史。 */
-type View = 'files' | 'changes' | 'history'
+/** 未查看其他分支时的页签：文件 / 改动 / 历史，外加「AI 改动」（本会话模型改过的文件）。 */
+type View = 'files' | 'changes' | 'history' | 'ai'
 type ViewTab = 'files' | 'changes' | 'history' | 'compare'
 type NotRepo = { isRepo: false; reason: string }
 const PAGE = 300
@@ -38,6 +43,23 @@ const LANE_COLORS = ['#3b82f6', '#f97316', '#22c55e', '#e11d48', '#a855f7', '#14
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
+
+/**
+ * diff 两侧的脱敏结果缓存：GitTab 会因轮询频繁重渲染，两侧文本最大各 2MB，不能每次都重新扫描。
+ * 只留最近几份（同一时刻右侧只显示一个 diff）。
+ */
+const redactCache = new Map<string, RedactResult>()
+function redactCached(text: string): RedactResult {
+  const hit = redactCache.get(text)
+  if (hit !== undefined) return hit
+  const out = redactSecrets(text)
+  redactCache.set(text, out)
+  if (redactCache.size > 4) redactCache.delete(redactCache.keys().next().value as string)
+  return out
+}
+
+/** 已处理的 aiOpen 导航：标签 id → 导航身份（见 GitTab 里的说明）。 */
+const handledAiOpens = new Map<string, string>()
 
 function relTime(ms: number): string {
   const s = Math.max(0, (Date.now() - ms) / 1000)
@@ -86,7 +108,19 @@ export function GitTab(props: SidebarBodyProps) {
   const [status, setStatus] = useState<GitStatus | NotRepo | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [diff, setDiff] = useState<{ target: DiffTarget; title: string; worktree?: string; sides?: DiffSides; error?: string } | null>(null)
+  /**
+   * 右侧 diff。AI 改动打开的 diff 额外带：abs = 文件绝对路径（可能不在仓库内，「查看源文件」用它）；
+   * base = 左侧基准的说明（相对 HEAD / 相对本会话首次改动前）。
+   */
+  const [diff, setDiff] = useState<{ target: DiffTarget; title: string; worktree?: string; sides?: DiffSides; error?: string; abs?: string; base?: string } | null>(null)
+  /** diff 临时显示原文（默认打码）；换一个 diff 就恢复打码。 */
+  const [showRaw, setShowRaw] = useState(false)
+  const aiChanges = useAiChanges(api, sessionId)
+  const [aiScope, setAiScopeState] = useState<AiScope>(() => (localStorage.getItem('dshws.git.aiScope') === 'all' ? 'all' : 'turn'))
+  const setAiScope = (scope: AiScope): void => {
+    setAiScopeState(scope)
+    localStorage.setItem('dshws.git.aiScope', scope)
+  }
   /** 右侧打开的真实文件（远程绝对路径）：diff 里点「查看源文件」时用。与 diff / 分支文件互斥。 */
   const [source, setSource] = useState<string | null>(null)
   const [sideBySide, setSideBySide] = useState(() => localStorage.getItem('dshws.git.sbs') !== '0')
@@ -158,10 +192,11 @@ export function GitTab(props: SidebarBodyProps) {
 
   // 右侧内容「后打开的为准」：diff 与分支文件互斥，打开一个就关掉另一个。
   // 否则 diff 优先级更高，先开过 diff 再点分支文件时右侧不更新（用户实测踩到）。
-  const openDiff = async (target: DiffTarget, title: string, worktree?: string): Promise<void> => {
+  const openDiff = async (target: DiffTarget, title: string, worktree?: string, extra?: { abs?: string; base?: string }): Promise<void> => {
     setViewFile(null)
     setSource(null)
-    const base = { target, title, ...(worktree !== undefined ? { worktree } : {}) }
+    setShowRaw(false)
+    const base = { target, title, ...(worktree !== undefined ? { worktree } : {}), ...extra }
     setDiff(base)
     try {
       const sides = await call<DiffSides>({ op: 'diff', target }, worktree)
@@ -289,6 +324,31 @@ export function GitTab(props: SidebarBodyProps) {
     }
   }
 
+  /**
+   * 导航参数 aiOpen（经 sidebarRight.openTab 传入）：切到「AI 改动」并打开该文件的 diff。
+   * 每次导航只处理一次（宿主 navigation.revision；旧宿主退回 nonce），按标签 id 记在模块级 —— 标签隐藏再显示会重挂组件，不能重复打开。
+   * 正在查看其他分支时先回到当前分支，下一轮再打开（换分支的副作用会清空右侧，不能和打开 diff 同一轮）。
+   */
+  const tabInfo = props.useTabInfo?.()
+  const navParams = tabInfo?.tab.navigation?.params as { aiOpen?: unknown; nonce?: unknown } | undefined
+  const aiOpen = typeof navParams?.aiOpen === 'string' ? navParams.aiOpen : undefined
+  const aiOpenKey = `${tabInfo?.tab.navigation?.revision ?? ''}|${typeof navParams?.nonce === 'number' ? navParams.nonce : ''}`
+  const aiOpenTab = tabInfo?.tab.id
+  const openAiChangeRef = useRef<((f: AiChangedFile) => Promise<void>) | null>(null)
+  const aiData = aiChanges.data
+  useEffect(() => {
+    if (aiOpen === undefined || aiOpenTab === undefined || status === null || aiData === null) return
+    if (handledAiOpens.get(aiOpenTab) === aiOpenKey) return
+    if (viewing !== null) {
+      setViewing(null)
+      return
+    }
+    handledAiOpens.set(aiOpenTab, aiOpenKey)
+    setView('ai')
+    const file = aiData.files.find((f) => f.path === aiOpen)
+    if (file !== undefined) void openAiChangeRef.current?.(file)
+  }, [aiOpen, aiOpenKey, aiOpenTab, status, aiData, viewing])
+
   if (workspace === undefined) return <div className="dshws-side-note">{t('side.noWorkspace')}</div>
   if (support === 'outdated') return <div className="dshws-side-note" data-tone="error">{t('side.localNeedsRestart')}</div>
 
@@ -308,8 +368,12 @@ export function GitTab(props: SidebarBodyProps) {
    * - 正在查看某个分支：打开该分支的文件（当前分支 / 另一个工作目录 → 真实文件；未检出分支 → 分支里的版本，可编辑）
    * - 没在查看分支（改动页 / 全部历史）：打开远程目录里的真实文件
    */
-  const openSourceOf = (d: { target: DiffTarget; worktree?: string }): void => {
+  const openSourceOf = (d: { target: DiffTarget; worktree?: string; abs?: string }): void => {
     const path = d.target.path
+    if (d.abs !== undefined) {
+      openAbs(d.abs)
+      return
+    }
     if (viewing !== null) {
       void openViewFile(path)
       return
@@ -325,6 +389,51 @@ export function GitTab(props: SidebarBodyProps) {
     setViewFile(null)
     setSource(abs)
   }
+
+  /**
+   * 「AI 改动」里点文件，左侧基准按可得性依次取：
+   * 1. 远程会话：远程写入工具存下的「本会话第一次改它之前」的原文（最贴近「AI 改了什么」）
+   * 2. 文件在 git 仓库内：相对 HEAD（最近提交 → 工作区）
+   * 3. 都没有（仓库外、非仓库）：直接打开文件
+   */
+  const openAiChange = async (f: AiChangedFile): Promise<void> => {
+    const rel = repo !== null ? repoRelative(workspace.remotePath, f.path) : undefined
+    const title = rel ?? displayPath(f.path)
+    let base: AiChangeBase | null = null
+    if (!workspace.local) {
+      try {
+        base = (await api.call('aiChangeBase', { sessionId, path: f.path })).base
+      } catch {
+        base = null
+      }
+    }
+    if (base !== null) {
+      setViewFile(null)
+      setSource(null)
+      setShowRaw(false)
+      const shell = { target: { kind: 'head' as const, path: rel ?? f.path.replace(/^\/+/, '') }, title, abs: f.path, base: t('git.ai.baseSession') }
+      setDiff(shell)
+      let modified = ''
+      let tooLarge = false
+      let binary = base.binary
+      try {
+        const cur = await api.call('sftpRead', { hostId: workspace.hostId, path: f.path })
+        modified = cur.content
+        tooLarge = cur.truncated
+        binary = binary || cur.binary
+      } catch {
+        // 文件已被删除（或读不到）：右侧为空，即「整个删掉了」。
+      }
+      setDiff({ ...shell, sides: { original: base.text, modified, binary, tooLarge } })
+      return
+    }
+    if (rel !== undefined) {
+      await openDiff({ kind: 'head', path: rel }, rel, undefined, { abs: f.path, base: t('git.ai.baseHead') })
+      return
+    }
+    openAbs(f.path)
+  }
+  openAiChangeRef.current = openAiChange
 
   // 内容页（diff / 分支里的文件）：宽时显示在右侧，窄时整页覆盖列表 —— 由 Split 决定。
   let detail: ReactNode = null
@@ -428,6 +537,12 @@ export function GitTab(props: SidebarBodyProps) {
 
   // ---------------------------------------------------------------- diff
   if (diff !== null) {
+    // 显示层脱敏：只改交给 Monaco 的文本，暂存 / 提交 / 写回都不经过这里。
+    const shown =
+      diff.sides === undefined || diff.sides.binary || diff.sides.tooLarge
+        ? null
+        : { original: redactCached(diff.sides.original), modified: redactCached(diff.sides.modified) }
+    const masked = shown !== null && (shown.original.hit || shown.modified.hit)
     detail = (
       <div className="dshws-side">
         <div className="dshws-side-head">
@@ -460,6 +575,23 @@ export function GitTab(props: SidebarBodyProps) {
             {t('git.expandAll')}
           </button>
         </div>
+        {diff.base !== undefined || masked ? (
+          <div className="dshws-side-path dshws-diff-meta">
+            {diff.base !== undefined ? <span>{diff.base}</span> : null}
+            {masked ? (
+              <button
+                type="button"
+                className="dshws-side-toggle dshws-redact-toggle"
+                data-active={showRaw}
+                aria-pressed={showRaw}
+                title={t('git.redactedHint')}
+                onClick={() => setShowRaw(!showRaw)}
+              >
+                {showRaw ? t('git.hideRaw') : `${t('git.redacted')} · ${t('git.showRaw')}`}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         {diff.error !== undefined ? (
           <div className="dshws-tree-note" data-tone="error">{diff.error}</div>
         ) : diff.sides === undefined ? (
@@ -470,11 +602,11 @@ export function GitTab(props: SidebarBodyProps) {
           <div className="dshws-tree-note">{t('git.tooLarge')}</div>
         ) : (
           <DiffView
-            key={JSON.stringify(diff.target)}
+            key={`${JSON.stringify(diff.target)}:${diff.abs ?? ''}:${showRaw ? 'raw' : 'masked'}`}
             t={t}
             path={diff.target.path}
-            original={diff.sides.original}
-            modified={diff.sides.modified}
+            original={showRaw || shown === null ? diff.sides.original : shown.original.text}
+            modified={showRaw || shown === null ? diff.sides.modified : shown.modified.text}
             sideBySide={sideBySide}
             collapseUnchanged={collapseUnchanged}
             fetchAsset={(name, i) => api.call('editorAsset', { name, index: i })}
@@ -485,6 +617,7 @@ export function GitTab(props: SidebarBodyProps) {
   }
 
   const repo = status !== null && status.isRepo ? status : null
+  const aiTurnCount = turnCount(aiChanges.data)
 
   const list = (
     <div className="dshws-side">
@@ -523,7 +656,14 @@ export function GitTab(props: SidebarBodyProps) {
             {repo.behind > 0 ? <span>↓{repo.behind}</span> : null}
           </span>
         ) : null}
-        <IconButton title={t('add.refresh')} disabled={busy} onClick={branchChanged}>
+        <IconButton
+          title={t('add.refresh')}
+          disabled={busy}
+          onClick={() => {
+            branchChanged()
+            refreshAiChanges(api, sessionId)
+          }}
+        >
           <IconRefresh />
         </IconButton>
       </div>
@@ -553,12 +693,16 @@ export function GitTab(props: SidebarBodyProps) {
           </div>
         </>
       ) : null}
-      {repo !== null && viewing === null ? (
+      {status !== null && viewing === null ? (
+        // 不是 git 仓库时只有「AI 改动」一页（文件直接打开，不做 diff）。
         <div className="dshws-git-tabs" role="tablist">
-          {(['files', 'changes', 'history'] as const).map((v) => (
-            <button key={v} type="button" role="tab" data-active={view === v} onClick={() => setView(v)}>
+          {(repo !== null ? (['files', 'changes', 'history', 'ai'] as const) : (['ai'] as const)).map((v) => (
+            <button key={v} type="button" role="tab" data-active={repo === null || view === v} onClick={() => setView(v)}>
               {t(`git.view.${v}`)}
-              {v === 'changes' && repo.files.length > 0 ? <span className="dshws-count">{repo.files.length}</span> : null}
+              {v === 'changes' && repo !== null && repo.files.length > 0 ? <span className="dshws-count">{repo.files.length}</span> : null}
+              {v === 'ai' && aiTurnCount > 0 ? (
+                <span className="dshws-count" data-tone="ai" title={t('git.ai.badge', { count: aiTurnCount })}>{aiTurnCount}</span>
+              ) : null}
             </button>
           ))}
         </div>
@@ -566,6 +710,19 @@ export function GitTab(props: SidebarBodyProps) {
       {error !== null ? <div className="dshws-tree-note" data-tone="error">{error}</div> : null}
       {status === null ? (
         <div className="dshws-tree-note">{t('files.loading')}</div>
+      ) : viewing === null && (view === 'ai' || !status.isRepo) ? (
+        <>
+          {!status.isRepo ? <div className="dshws-side-note">{status.reason}</div> : null}
+          <AiChangesView
+            t={t}
+            state={aiChanges}
+            scope={aiScope}
+            onScope={setAiScope}
+            rootDir={workspace.remotePath}
+            selected={diff?.abs ?? source}
+            onOpen={(f) => void openAiChange(f)}
+          />
+        </>
       ) : !status.isRepo ? (
         <div className="dshws-side-note">{status.reason}</div>
       ) : viewing !== null && binfo === null ? (
@@ -722,23 +879,24 @@ function ChangesView(props: ChangesProps) {
     const name = f.path.slice(f.path.lastIndexOf('/') + 1)
     const dir = f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/')) : ''
     return (
-      <div key={key} className="dshws-git-row" onContextMenu={(e) => rowMenu(e, f, section, key)}>
-        <button
-          type="button"
-          className="dshws-git-file"
-          title={f.origPath !== undefined ? `${f.origPath} → ${f.path}` : f.path}
-          onClick={() =>
+      <div
+        key={key}
+        className="dshws-git-row"
+        onContextMenu={(e) => rowMenu(e, f, section, key)}
+        {...rowButtonProps(
+          () =>
             void props.openDiff(
               section === 'staged' ? { kind: 'staged', path: f.path } : { kind: 'worktree', path: f.path, untracked: section === 'untracked' },
               f.path
             )
-          }
-        >
+        )}
+      >
+        <span className="dshws-git-file" title={f.origPath !== undefined ? `${f.origPath} → ${f.path}` : f.path}>
           <StatusBadge s={letter} />
           <FileIcon name={name} />
           <span className="dshws-side-name" data-deleted={letter === 'D'}>{name}</span>
           {dir !== '' ? <span className="dshws-git-dir">{dir}</span> : null}
-        </button>
+        </span>
         {confirming === key ? (
           <span className="dshws-git-confirm">
             {t('git.confirmDiscard')}
@@ -1223,22 +1381,21 @@ function BranchChangesView(props: {
     }
     const f = r.file
     return (
-      <div className="dshws-git-row">
-        <button
-          type="button"
-          className="dshws-git-file"
-          title={f.origPath !== undefined ? `${f.origPath} → ${f.path}` : f.path}
-          onClick={() =>
+      <div
+        className="dshws-git-row"
+        {...rowButtonProps(
+          () =>
             void props.openDiff(
               { kind: 'branch', ref: refName, path: f.path, ...(f.origPath !== undefined ? { origPath: f.origPath } : {}) },
               `${shortRef(refName)} · ${f.path}`
             )
-          }
-        >
+        )}
+      >
+        <span className="dshws-git-file" title={f.origPath !== undefined ? `${f.origPath} → ${f.path}` : f.path}>
           <StatusBadge s={f.status} />
           <FileIcon name={f.path.slice(f.path.lastIndexOf('/') + 1)} />
           <span className="dshws-side-name" data-deleted={f.status === 'D'}>{f.path}</span>
-        </button>
+        </span>
         {confirming === f.path ? (
           <span className="dshws-git-confirm">
             {t('git.confirmDiscard')}
@@ -1339,22 +1496,23 @@ function CompareView(props: ViewProps & { openDiff(target: DiffTarget, title: st
       itemHeight={() => ROW_HEIGHT}
       header={<div className="dshws-tree-note">{t('git.compareHint', { count: result.files.length })}</div>}
       renderItem={(f) => (
-        <button
-          type="button"
-          className="dshws-git-file"
-          title={f.origPath !== undefined ? `${f.origPath} → ${f.path}` : f.path}
-          onClick={() =>
-            void props.openDiff(
-              // 复用提交对比：左 = 当前分支（HEAD）快照，右 = 查看的分支快照。
-              { kind: 'commit', hash: result.target, parent: result.base, path: f.path, ...(f.origPath !== undefined ? { origPath: f.origPath } : {}) },
-              `HEAD ↔ ${shortRef(refName)} · ${f.path}`
-            )
-          }
+        <div
+          className="dshws-git-row"
+          {...rowButtonProps(
+            () =>
+              void props.openDiff(
+                // 复用提交对比：左 = 当前分支（HEAD）快照，右 = 查看的分支快照。
+                { kind: 'commit', hash: result.target, parent: result.base, path: f.path, ...(f.origPath !== undefined ? { origPath: f.origPath } : {}) },
+                `HEAD ↔ ${shortRef(refName)} · ${f.path}`
+              )
+          )}
         >
-          <StatusBadge s={f.status} />
-          <FileIcon name={f.path.slice(f.path.lastIndexOf('/') + 1)} />
-          <span className="dshws-side-name" data-deleted={f.status === 'D'}>{f.path}</span>
-        </button>
+          <span className="dshws-git-file" title={f.origPath !== undefined ? `${f.origPath} → ${f.path}` : f.path}>
+            <StatusBadge s={f.status} />
+            <FileIcon name={f.path.slice(f.path.lastIndexOf('/') + 1)} />
+            <span className="dshws-side-name" data-deleted={f.status === 'D'}>{f.path}</span>
+          </span>
+        </div>
       )}
     />
   )
@@ -1534,21 +1692,25 @@ function HistoryView(props: HistoryProps) {
               {open.error !== undefined ? <div className="dshws-tree-note" data-tone="error">{open.error}</div> : null}
               {open.files === undefined && open.error === undefined ? <div className="dshws-tree-note">{t('files.loading')}</div> : null}
               {open.files?.map((f) => (
-                <button
+                // 整行可点：原来的 <button> 在块级容器里按内容收缩，只有文字部分能点开 diff。
+                <div
                   key={f.path}
-                  type="button"
-                  className="dshws-git-file"
-                  onClick={() =>
-                    void props.openDiff(
-                      { kind: 'commit', hash: c.hash, parent: c.parents[0] ?? null, path: f.path, ...(f.origPath !== undefined ? { origPath: f.origPath } : {}) },
-                      `${c.hash.slice(0, 7)} · ${f.path}`
-                    )
-                  }
+                  className="dshws-git-row"
+                  title={f.origPath !== undefined ? `${f.origPath} → ${f.path}` : f.path}
+                  {...rowButtonProps(
+                    () =>
+                      void props.openDiff(
+                        { kind: 'commit', hash: c.hash, parent: c.parents[0] ?? null, path: f.path, ...(f.origPath !== undefined ? { origPath: f.origPath } : {}) },
+                        `${c.hash.slice(0, 7)} · ${f.path}`
+                      )
+                  )}
                 >
-                  <StatusBadge s={f.status} />
-                  <FileIcon name={f.path.slice(f.path.lastIndexOf('/') + 1)} />
-                  <span className="dshws-side-name" data-deleted={f.status === 'D'}>{f.path}</span>
-                </button>
+                  <span className="dshws-git-file">
+                    <StatusBadge s={f.status} />
+                    <FileIcon name={f.path.slice(f.path.lastIndexOf('/') + 1)} />
+                    <span className="dshws-side-name" data-deleted={f.status === 'D'}>{f.path}</span>
+                  </span>
+                </div>
               ))}
             </div>
           ) : null}

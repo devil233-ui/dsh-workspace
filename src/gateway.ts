@@ -32,6 +32,7 @@ import { REMOTE_MARKER } from './agent/present-tool.js'
 import { BetterSidebarError, betterSidebarSetEnabled, betterSidebarStatus } from './better-sidebar.js'
 import { isAllowedExternalUrl } from './wire/open-with.js'
 import { openExternal } from './open-external.js'
+import { foldAiChanges } from './agent/ai-changes.js'
 
 /** 远程（RemoteFs）与本地（LocalFs）共同的文件操作面。 */
 type FileOps = Pick<
@@ -899,6 +900,83 @@ export class WorkspaceGateway extends RemoteService {
   /** 字节版（base64，整包进内存，所以与 sftpReadData 同一上限；大文件走 HTTP 下载路由的 local:*）。 */
   localReadData(input: In<'localReadData'>): Out<'localReadData'> {
     return this.guard(() => localReader.readData(input.path, 8 * 1024 * 1024))
+  }
+
+  /** 「AI 改动」折叠结果的缓存：Git 侧栏每几秒轮询一次，事件没变就不重复折叠。 */
+  private aiCache = new Map<string, { key: string; result: MethodIO['aiChanges'][1] }>()
+
+  /**
+   * 会话事件：运行中的会话读内存快照（与 better-sidebar 的 changes.ops、本插件 upload_to_remote 同一入口），
+   * 不在内存里的冷会话只读打开持久化日志。都拿不到返回 undefined。
+   */
+  private async sessionEvents(sessionId: string): Promise<{ events: readonly unknown[]; live: boolean } | undefined> {
+    const live = this.rt.host.sessions?.get(sessionId)
+    if (typeof live?.snapshotEvents === 'function') return { events: live.snapshotEvents(), live: true }
+    const persistence = this.rt.host.sessionPersistence
+    if (typeof persistence?.open !== 'function') return undefined
+    try {
+      const handle = await persistence.open(sessionId, 'read')
+      try {
+        return { events: (await handle.read()).events, live: false }
+      } finally {
+        await handle.close()
+      }
+    } catch {
+      return undefined
+    }
+  }
+
+  private async sessionCwd(sessionId: string): Promise<string | undefined> {
+    const cwd = this.rt.host.sessions?.get(sessionId)?.header?.cwd ?? (await this.rt.host.sessionPersistence?.stat(sessionId))?.header?.cwd
+    return cwd === '' ? undefined : cwd
+  }
+
+  /**
+   * 「AI 改动」：模型在该会话里写入 / 编辑 / 删除过的文件（见 agent/ai-changes.ts）。
+   * 路径换算：远程会话按远程工作区规则（与远程工具一致，本机路径不计入）；本机会话相对 cwd 解析成本地 POSIX 形式。
+   */
+  aiChanges(input: In<'aiChanges'>): Out<'aiChanges'> {
+    return this.guard(async () => {
+      const cached = this.aiCache.get(input.sessionId)
+      const got = await this.sessionEvents(input.sessionId)
+      if (got === undefined) return { available: false, turn: null, files: [] }
+      const cwd = await this.sessionCwd(input.sessionId)
+      const last = got.events[got.events.length - 1] as { seq?: unknown } | undefined
+      const key = `${got.live ? 'live' : 'cold'}:${got.events.length}:${String(last?.seq)}:${cwd ?? ''}`
+      if (cached !== undefined && cached.key === key) return cached.result
+      const binding = this.rt.bindings.resolve(cwd)
+      const resolve = (raw: string): string | undefined => {
+        try {
+          if (binding !== undefined) return toRemotePath(binding, raw)
+          const abs = path.isAbsolute(raw) || /^[A-Za-z]:[\\/]/.test(raw) ? path.resolve(raw) : cwd === undefined ? undefined : path.resolve(cwd, raw)
+          return abs === undefined ? undefined : toLocalPosix(abs)
+        } catch {
+          return undefined
+        }
+      }
+      const result = foldAiChanges(got.events, resolve)
+      this.aiCache.set(input.sessionId, { key, result })
+      // 只留最近用过的少量会话，避免长时间运行时缓存无限增长。
+      if (this.aiCache.size > 32) this.aiCache.delete(this.aiCache.keys().next().value as string)
+      return result
+    })
+  }
+
+  /** 远程会话里某文件被改之前的原文（agent/preimages.ts 的基线）；拿不到返回 null，浏览器退回相对 HEAD。 */
+  aiChangeBase(input: In<'aiChangeBase'>): Out<'aiChangeBase'> {
+    return this.guard(async () => {
+      const binding = this.rt.bindings.resolve(await this.sessionCwd(input.sessionId))
+      if (binding === undefined) return { base: null }
+      const target = normalizeRemotePath(input.path)
+      const entry = this.rt.preimages.list(input.sessionId).find((e) => e.hostId === binding.hostId && e.path === target)
+      if (entry === undefined) return { base: null }
+      if (entry.absent) return { base: { absent: true, text: '', binary: false } }
+      if (entry.tooLarge || entry.sha256 === null) return { base: null }
+      const buffer = this.rt.preimages.read(input.sessionId, entry.sha256)
+      if (buffer === undefined) return { base: null }
+      const binary = buffer.subarray(0, 8000).includes(0)
+      return { base: { absent: false, text: binary ? '' : buffer.toString('utf8'), binary } }
+    })
   }
 
   remoteWorkspaces(_: In<'remoteWorkspaces'>): Out<'remoteWorkspaces'> {

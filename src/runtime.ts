@@ -95,11 +95,13 @@ export interface HostServices {
 
 export interface SessionPersistenceLike {
   stat(id: string): Promise<{ header?: { cwd?: string } } | undefined> | { header?: { cwd?: string } } | undefined
+  /** 只读打开冷会话的事件日志（DSH 0.1.5+；不取写权限，会话在别处运行时也能读）。 */
+  open?(id: string, mode: 'read'): Promise<{ read(): Promise<{ events: readonly unknown[] }>; close(): Promise<void> | void }>
 }
 
 /** 宿主 sessions 服务里本插件用到的部分。 */
 export interface SessionsLike {
-  get(id: string): { header?: { cwd?: string } } | undefined
+  get(id: string): { header?: { cwd?: string }; snapshotEvents?(): readonly unknown[] } | undefined
 }
 
 export interface RuntimeOverrides {

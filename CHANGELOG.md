@@ -48,6 +48,15 @@
   - 压缩并下载 ZIP：新 HTTP 路由 `POST /dsh-workspace/sftp/archive`（遍历并检查上限，返回一次性令牌）+ `GET /dsh-workspace/sftp/archive?token=`（流式输出），远程经 SFTP 读流、本机限会话工作区内；上限 10000 个文件 / 2GB，超限在下载开始前报错；符号链接不打包。ZIP 写入器为自带的最小实现（deflate + 数据描述符 + UTF-8 文件名，`src/sftp/zip.ts`），未引入新依赖。
   - 右键菜单支持子菜单（悬停或点击展开，放不下时向左翻）。
 
+### Git 仓库
+
+- 新增：「Git 仓库」侧栏新增「AI 改动」页签（本机与远程会话通用），列出模型在本会话里写入 / 编辑 / 删除过的文件。
+  - 「本轮 / 全部会话」两档切换（本轮 = 最近一个轮次），每个文件带操作类型（W 写入 / E 编辑 / D 删除）与操作次数；页签与右侧栏「Git 仓库」标题上显示本轮改动文件数角标。
+  - 数据来源：新网关方法 `aiChanges` 在宿主读会话事件（运行中的会话读 `sessions.get(id).snapshotEvents()`，冷会话只读打开 `sessionPersistence`），折叠 `tool/call` + `tool/result`：识别 write / create / edit / str_replace_editor / upload_to_remote，以及 bash / pwsh 里的 `rm`、`Remove-Item`、`del` 等删除命令（带通配、变量的参数不计）；结果报错的调用剔除。远程会话按远程工作区规则换算路径（本机路径不计），本机会话相对 cwd 解析。
+  - 点开文件：远程会话优先与「本会话第一次改它之前」的原文对比（远程写入工具存下的基线，新网关方法 `aiChangeBase`）；否则在 git 仓库内相对 HEAD 对比（新增 diff 目标 `head`：最近提交 → 工作区）；仓库外或非 git 目录直接打开文件。非 git 目录也显示该页签。
+- 变更：Git 文件列表整行可点 —— 「历史」提交详情的改动文件（原来只能点到文字）、「改动」页（含查看分支时的改动 / 比较列表）与「AI 改动」页，点击行内任意位置打开 diff；行带悬停高亮与手型光标，可键盘操作（`role="button"`、Tab 聚焦、Enter / Space 打开），行内的暂存 / 丢弃等按钮不触发整行点击（`src/client/sidebar/row-activate.ts`）。
+- 新增：Git 对比视图对疑似密钥打码（只作用于显示，暂存 / 提交 / 写回仍是真实内容）：常见令牌前缀（sk-、ghp_、github_pat_、AKIA、xoxb- 等）、PEM 私钥正文、`.env` 风格 `KEY=VALUE` 中名称含 SECRET / TOKEN / KEY / PASSWORD 的值、YAML / JSON 的 password / apiKey 等字段、行内 `password=` / `token=` / `secret=`、URL 里的口令、Bearer 凭据；保留首尾少量字符。命中时标题下出现「已打码 · 显示原文」开关，可临时显示原文，换一个 diff 自动恢复打码（`src/client/sidebar/redact.ts`）。
+
 - 不提供：底部 dock（输入框上方的终端 / 后台任务 / Git 改动面板，方案 3.9）—— 按用户决定取消，开发中的实现、页头开合按钮、「侧边栏」页签的「底部 dock」开关与偏好 `sidebar.tabs.dock` 均已删除。已有 `prefs.json` 里残留的 `tabs.dock` 读取时被忽略、下次保存不再写出；升级后仍开着的旧页面提交该键也不会让整次保存被拒。Git 标签的导航参数 `aiOpen`（打开某文件的 AI 改动 diff）保留。
 
 ### 对外打开入口

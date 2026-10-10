@@ -170,6 +170,8 @@ const INPUTS: Record<MethodName, z.ZodType> = {
   betterSidebarSetEnabled: z.object({ enabled: z.boolean() }).strict(),
   sftpDirStamps: z.object({ hostId: id, paths: z.array(remotePath).max(DIR_STAMPS_MAX) }),
   openExternalUrl: z.object({ url: z.string().min(1).max(OPEN_URL_MAX) }).strict(),
+  aiChanges: z.object({ sessionId: z.string().min(1).max(256) }).strict(),
+  aiChangeBase: z.object({ sessionId: z.string().min(1).max(256), path: remotePath }).strict(),
 }
 
 /** 「侧边栏」偏好的局部更新：严格模式，未知字段直接拒绝（防止浏览器把任意数据写进偏好文件）。 */
@@ -233,6 +235,7 @@ function gitSchema() {
       op: z.literal('diff'),
       target: z.discriminatedUnion('kind', [
         z.object({ kind: z.literal('worktree'), path: repoPath, untracked: z.boolean().optional() }),
+        z.object({ kind: z.literal('head'), path: repoPath }),
         z.object({ kind: z.literal('staged'), path: repoPath }),
         z.object({ kind: z.literal('commit'), hash, parent: hash.nullable(), path: repoPath, origPath: repoPath.optional() }),
         z.object({ kind: z.literal('branch'), ref, path: repoPath, origPath: repoPath.optional() })

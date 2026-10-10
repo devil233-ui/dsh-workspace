@@ -123,6 +123,12 @@ describe.skipIf(!hasGit)('LocalGit', () => {
     await git.branchCommit('refs/heads/feature', 'add new')
     expect(existsSync(path.join(root, 'new.txt'))).toBe(false)
     expect((await git.file('refs/heads/feature', 'new.txt')).text).toBe('hello')
+    // 「AI 改动」用的 head 对比：HEAD → 工作区（不论是否暂存）；HEAD 里没有的文件左侧为空
+    writeFileSync(path.join(root, '中文.txt'), 'y')
+    await git.stage(['中文.txt'])
+    expect(await git.diff({ kind: 'head', path: '中文.txt' })).toMatchObject({ original: 'x', modified: 'y' })
+    writeFileSync(path.join(root, 'ai.txt'), 'new')
+    expect(await git.diff({ kind: 'head', path: 'ai.txt' })).toMatchObject({ original: '', modified: 'new' })
   })
 
   it('不是仓库时给出说明', async () => {

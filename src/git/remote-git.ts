@@ -100,6 +100,7 @@ export interface BranchInfo {
 
 export type DiffTarget =
   | { kind: 'worktree'; path: string; untracked?: boolean }
+  | { kind: 'head'; path: string }
   | { kind: 'staged'; path: string }
   | { kind: 'branch'; ref: string; path: string; origPath?: string }
   | { kind: 'commit'; hash: string; parent: string | null; path: string; origPath?: string }
@@ -207,6 +208,10 @@ export class GitRepo {
     if (target.kind === 'worktree') {
       // 未暂存改动：暂存区（没有则 HEAD / 空）→ 工作区。
       a = target.untracked === true ? EMPTY_SIDE : await this.blob(`:${path}`)
+      b = await this.worktreeFile(path)
+    } else if (target.kind === 'head') {
+      // 「AI 改动」：最近提交 → 工作区（暂存与否都算），文件不在 HEAD 里则左侧为空、已删除则右侧为空。
+      a = await this.blob(`HEAD:${path}`)
       b = await this.worktreeFile(path)
     } else if (target.kind === 'staged') {
       a = await this.blob(`HEAD:${path}`)

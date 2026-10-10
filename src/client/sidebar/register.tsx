@@ -29,6 +29,7 @@ import type { SidebarTabKey } from '../../wire/sidebar-prefs.js'
 import { FILE_ID, FILES_ID, GIT_ID, SSH_ID, TASKS_KIND } from './kinds.js'
 import { createSidebarOpener, registerOpenToolViews, setWorkspaceOpener } from './open-in-sidebar.js'
 import { setSidebarHost } from './host-bridge.js'
+import { turnCount, useAiChanges } from './ai-changes.js'
 
 interface TabRegistry {
   register(definition: {
@@ -69,6 +70,23 @@ const GIT_ICON = (p: { size?: number }) =>
 
 function TabTitle(props: { useTabInfo(): SidebarTabInfo }) {
   return createElement('span', null, props.useTabInfo().tab.title)
+}
+
+/**
+ * 「Git 仓库」标签标题：标题后带本轮 AI 改动文件数角标（与正文共用 aiChanges 轮询，见 ai-changes.ts）。
+ * 标题插槽是会话作用域，sessionId / api 由注册时的 inject 提供；拿不到时退化为纯标题。
+ */
+function GitTabTitle(props: { useTabInfo(): SidebarTabInfo; api?: WorkspaceApi; sessionId?: string; t?: Translate }) {
+  const title = props.useTabInfo().tab.title
+  const state = useAiChanges(props.api as WorkspaceApi, props.api === undefined ? undefined : props.sessionId)
+  const count = turnCount(state.data)
+  if (count === 0) return createElement('span', null, title)
+  return createElement(
+    'span',
+    { className: 'dshws-tab-title' },
+    title,
+    createElement('span', { className: 'dshws-tab-badge', title: props.t?.('git.ai.badge', { count }) }, String(count))
+  )
 }
 
 export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: WorkspaceApi, log: (m: string, e?: unknown) => void): () => void {
@@ -171,12 +189,16 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
         log(`注册右侧栏「${label}」失败`, error)
       }
     }
-    const slots = (id: string, body: unknown): (() => void) => {
+    const slots = (id: string, body: unknown, title: unknown = TabTitle): (() => void) => {
       const a = ctx.slots.inject('sidebar.right.pane.tab', () =>
         ctx.slots.register({ name: 'sidebar.right.pane.tab', key: id, inject: inject as never }, body as never)
       )
+      // 标题插槽与正文同为会话作用域：自定义标题（Git 的 AI 改动角标）需要同一份 inject 拿到 sessionId / api。
       const b = ctx.slots.inject('sidebar.right.pane.tab.title', () =>
-        ctx.slots.register({ name: 'sidebar.right.pane.tab.title', key: id }, TabTitle as never)
+        ctx.slots.register(
+          { name: 'sidebar.right.pane.tab.title', key: id, ...(title === TabTitle ? {} : { inject: inject as never }) },
+          title as never
+        )
       )
       return () => {
         b()
@@ -268,7 +290,7 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
         title: () => t('side.git'),
         guide: [{ id: GIT_ID, order: 12, title: () => t('side.git'), description: () => t('side.gitHint'), icon: GIT_ICON }]
       })
-      const offSlots = slots(GIT_ID, GitTab)
+      const offSlots = slots(GIT_ID, GitTab, GitTabTitle)
       return () => {
         offSlots()
         off()

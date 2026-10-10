@@ -19,6 +19,7 @@ import type { ListResult, ReadResult, RemoteEntry, RemoveResult, SearchResult } 
 import type { UpdateStatus, UploadView } from '../update/updater.js'
 import type { BetterSidebarStatus, BetterSidebarToggleOutput } from '../better-sidebar.js'
 import type { SidebarPrefs, SidebarPrefsPatch } from './sidebar-prefs.js'
+import type { AiChangeBase, AiChangesResult } from './ai-changes.js'
 
 export type { RecentTerminal, TerminalView, ListResult, ReadResult, RemoteEntry, RemoveResult, SearchResult, UpdateStatus, UploadView }
 export type { BetterSidebarStatus, BetterSidebarToggleOutput, SidebarPrefs, SidebarPrefsPatch }
@@ -212,6 +213,16 @@ export interface MethodIO {
    * 只放行内置编辑器协议与用户在「侧边栏」页配置过的模板协议。
    */
   openExternalUrl: [{ url: string }, { ok: true }]
+  /**
+   * 「AI 改动」：从会话事件折叠出模型写入 / 编辑 / 删除过的文件（含本轮与全部轮次的操作数）。
+   * 路径已换算成侧栏工作区的写法（远程 POSIX / 本地 POSIX 形式），不属于该会话工作区的不计入。
+   */
+  aiChanges: [{ sessionId: string }, AiChangesResult]
+  /**
+   * 远程会话里某文件「本会话第一次被改之前」的内容（远程写入工具存下的原文）。
+   * 本机会话 / 没有存档 / 存档超过上限时 base 为 null，浏览器退回相对 HEAD 比较。
+   */
+  aiChangeBase: [{ sessionId: string; path: string }, { base: AiChangeBase | null }]
 }
 
 export interface LocalListOutput {

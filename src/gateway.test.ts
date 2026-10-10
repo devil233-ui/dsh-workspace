@@ -749,3 +749,34 @@ describe('本地工作区（hostId = local:<会话 id>）', () => {
     await expectCode(gw.openExternalUrl({ url: 'myapp://open?x=1' }), ERROR_CODES.failed)
   })
 })
+describe('AI 改动（aiChanges / aiChangeBase）', () => {
+  const ev = (seq: number, turn: number, callId: string, name: string, args: unknown) => ({ seq, type: 'tool/call', data: { turn, callId, name, arguments: JSON.stringify(args) } })
+
+  it('本机会话：相对路径按 cwd 解析成本地 POSIX 形式；拿不到事件时 available=false', async () => {
+    const ws = mkdtempSync(path.join(tmpdir(), 'dshws-gw-ai-'))
+    const events = [{ seq: 0, type: 'turn/start', data: { turn: 1 } }, ev(1, 1, 'a', 'write', { file_path: 'src/a.ts', content: 'x' })]
+    rt.host.sessions = { get: (id) => (id === 's1' ? { header: { cwd: ws }, snapshotEvents: () => events } : undefined) }
+    const r = await gw.aiChanges({ sessionId: 's1' })
+    const lp = (p: string): string => (process.platform === 'win32' ? `/${p.replace(/\\/g, '/')}` : p)
+    expect(r).toEqual({ available: true, turn: 1, files: [{ path: lp(path.join(ws, 'src', 'a.ts')), ops: 1, turnOps: 1, last: 'write', lastSeq: 1 }] })
+    expect(await gw.aiChanges({ sessionId: 'ghost' })).toEqual({ available: false, turn: null, files: [] })
+    expect(await gw.aiChangeBase({ sessionId: 's1', path: '/x' })).toEqual({ base: null })
+    rmSync(ws, { recursive: true, force: true })
+  })
+
+  it('远程会话：路径换算成远程绝对路径（本机路径不计）；改动前原文取自 preimage 存档', async () => {
+    await gw.initVault({ password: 'master-pw' })
+    const saved = await gw.saveHost(host({ auth: { kind: 'agent' } }))
+    rt.files.statPath = async () => ({ type: 'dir', size: 0, mtimeMs: 0 })
+    const { localPath } = await gw.createRemoteWorkspace({ hostId: saved.id, remotePath: '/srv/app', title: 'app' })
+    const events = [ev(1, 1, 'a', 'edit', { file_path: 'a.ts', old_string: 'x', new_string: 'y' }), ev(2, 1, 'b', 'write', { file_path: 'C:\\x.txt', content: '' })]
+    rt.host.sessions = { get: (id) => (id === 'r1' ? { header: { cwd: localPath }, snapshotEvents: () => events } : undefined) }
+    const r = await gw.aiChanges({ sessionId: 'r1' })
+    expect(r.files.map((f) => f.path)).toEqual(['/srv/app/a.ts'])
+    rt.preimages.capture('r1', { hostId: saved.id, path: '/srv/app/a.ts', tool: 'edit' }, Buffer.from('before'))
+    rt.preimages.capture('r1', { hostId: saved.id, path: '/srv/app/new.ts', tool: 'write' }, undefined)
+    expect(await gw.aiChangeBase({ sessionId: 'r1', path: '/srv/app/a.ts' })).toEqual({ base: { absent: false, text: 'before', binary: false } })
+    expect(await gw.aiChangeBase({ sessionId: 'r1', path: '/srv/app/new.ts' })).toEqual({ base: { absent: true, text: '', binary: false } })
+    expect(await gw.aiChangeBase({ sessionId: 'r1', path: '/srv/app/other.ts' })).toEqual({ base: null })
+  })
+})
