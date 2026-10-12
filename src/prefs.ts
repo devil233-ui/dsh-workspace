@@ -1,5 +1,5 @@
 /*
- * @Description: 插件偏好设置（忽略规则、接管「添加工作区」、接管「文件」侧栏、「侧边栏」管理页）
+ * @Description: 插件偏好设置（忽略规则、接管「添加工作区」、接管「文件」侧栏、「侧边栏」管理页、远程会话保留本机 shell）
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/prefs.ts
  */
@@ -23,11 +23,17 @@ export interface Prefs {
    * 其他插件（如 better-sidebar）已接管时不抢，只提示。
    */
   takeoverFilesSidebar: boolean
+  /**
+   * 接管远程工作区时是否保留本机 shell（pwsh / powershell / cmd）。默认关闭：
+   * 这些工具从清单里去掉，避免模型在**本机**执行命令；打开后照常可用，
+   * 但命令确实跑在本机（设置页有警示、连接日志留痕）。切换后刷新页面 / 重开会话生效。
+   */
+  allowLocalShell: boolean
   /** 「侧边栏」管理页的偏好（标签开关、文件关联、外观等，见 wire/sidebar-prefs.ts）。 */
   sidebar: SidebarPrefs
 }
 
-const DEFAULTS: Prefs = { ignore: [], takeoverAddWorkspace: true, takeoverFilesSidebar: true, sidebar: DEFAULT_SIDEBAR_PREFS }
+const DEFAULTS: Prefs = { ignore: [], takeoverAddWorkspace: true, takeoverFilesSidebar: true, allowLocalShell: false, sidebar: DEFAULT_SIDEBAR_PREFS }
 
 export function prefsFile(): string {
   return path.join(pluginRoot(), 'prefs.json')
@@ -55,6 +61,7 @@ export class PrefsStore {
         ignore: Array.isArray(parsed.ignore) ? parsed.ignore.filter((s): s is string => typeof s === 'string') : [],
         takeoverAddWorkspace: parsed.takeoverAddWorkspace !== false,
         takeoverFilesSidebar: parsed.takeoverFilesSidebar !== false,
+        allowLocalShell: parsed.allowLocalShell === true,
         sidebar: normalizeSidebarPrefs(parsed.sidebar)
       }
     } catch {
@@ -75,6 +82,11 @@ export class PrefsStore {
 
   setFilesTakeover(enabled: boolean): Prefs {
     return this.save({ ...this.get(), takeoverFilesSidebar: enabled })
+  }
+
+  /** 远程工作区会话是否保留本机 shell（默认关闭；打开后命令会在本机执行）。 */
+  setLocalShell(enabled: boolean): Prefs {
+    return this.save({ ...this.get(), allowLocalShell: enabled })
   }
 
   setSidebar(patch: SidebarPrefsPatch): Prefs {

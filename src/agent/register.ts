@@ -58,7 +58,10 @@ interface AgentLike {
   session: { id?: string; header: { cwd?: string } }
 }
 
-/** 本地 shell 工具：远程会话里必须隐藏，否则模型可能在本机执行命令。 */
+/**
+ * 本地 shell 工具：远程会话里默认隐藏，否则模型可能在本机执行命令。
+ * 偏好 allowLocalShell 打开时保留它们 —— 此时命令确实跑在本机（设置页有警示、连接日志留痕）。
+ */
 const LOCAL_SHELLS = ['pwsh', 'powershell', 'cmd']
 
 export interface AgentToolsDeps {
@@ -270,8 +273,12 @@ export function mountAgentTools(ctx: Context, deps: AgentToolsDeps): () => void 
         tools.register(deps.defineTool(remoteBashDefinition(binding, env, guard)))
         return true
       })
-      // 本机 shell：优先从清单里去掉；去不掉就用同名的拒绝版本遮蔽，绝不让它在本机执行。
-      for (const name of LOCAL_SHELLS.filter((n) => builtinOf(n) !== undefined)) {
+      // 本机 shell：默认从清单里去掉；去不掉就用同名的拒绝版本遮蔽，绝不让它在本机执行。
+      // 偏好 allowLocalShell 打开时不隐藏 —— 命令会真的在本机执行（设置页有警示、连接日志留痕）。
+      // 偏好可能缺席（测试夹具 / 旧宿主）：缺席按默认（隐藏）处理，这里绝不抛错 ——
+      // 本行在 step 之外，inject 回调里抛错会让 cordis 回滚本次已做的全部注册。
+      const keepLocalShells = deps.rt.prefs?.get().allowLocalShell === true
+      for (const name of (keepLocalShells ? [] : LOCAL_SHELLS).filter((n) => builtinOf(n) !== undefined)) {
         step(`hide ${name}`, () => {
           try {
             tools.restrict({ deny: [name] })

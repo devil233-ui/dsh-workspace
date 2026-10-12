@@ -189,6 +189,8 @@ export interface MethodIO {
   updateInstall: [{ source: 'latest' } | { source: 'upload'; token: string }, UpdateStatus]
   /** 开关「接管 DSH 文件侧栏」。 */
   setFilesTakeover: [{ enabled: boolean }, PrefsOutput]
+  /** 开关「远程会话保留本机 shell」（默认关闭；打开后命令会在本机执行）。 */
+  setLocalShell: [{ enabled: boolean }, PrefsOutput]
   /**
    * 交付卡片（deliverables/presented 事件）里某个文件是否远程工作区文件。
    * 卡片 ▾ 菜单的请求只带「会话 + 事件序号 + 文件下标」，浏览器据此决定接管还是交还宿主。
@@ -295,6 +297,8 @@ export interface PrefsOutput {
   takeoverAddWorkspace: boolean
   /** 接管 DSH 自带的「文件」侧栏（默认开启）。 */
   takeoverFilesSidebar: boolean
+  /** 远程工作区会话保留本机 shell（默认关闭）。 */
+  allowLocalShell: boolean
   /** 「侧边栏」管理页偏好（完整、已规范化）。 */
   sidebar: SidebarPrefs
 }
