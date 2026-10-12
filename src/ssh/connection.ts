@@ -141,6 +141,7 @@ export class SshConnection {
 
     const startedAt = Date.now()
     return await new Promise<Ssh2Client>((resolve, reject) => {
+      let handshakeError: unknown
       const onReady = (): void => {
         cleanup()
         log.info(
@@ -151,6 +152,7 @@ export class SshConnection {
         resolve(client)
       }
       const onError = (error: unknown): void => {
+        handshakeError = error
         cleanup()
         log.error(target.hostId, 'handshake', `连接失败：${target.hostname}:${target.port}`, error)
         reject(error instanceof Error ? error : new Error(String(error)))
@@ -161,6 +163,15 @@ export class SshConnection {
       }
       client.once('ready', onReady as (...args: unknown[]) => void)
       client.once('error', onError as (...args: unknown[]) => void)
+      // 常驻兜底监听（issue #6）：上面的 onError 在握手结束后就被摘掉，但 ssh2 在已建立的连接上
+      // 仍会 emit('error')（对端重置 client-socket / 保活超时 client-timeout，或握手失败后的第二次错误）。
+      // 'error' 没有监听者时 Node 直接抛出，宿主按 fail-loud 策略 exit(1)，整个 DSH 随之崩溃。
+      // 这里只记日志；连接回收与重连交给 SshPool 的 close / end 处理（ssh2 出错后会关闭 socket 并 emit close）。
+      client.on('error', ((error: unknown) => {
+        if (error === handshakeError) return // 同一个错误已由 onError 记录并 reject，不重复记
+        const detail = error instanceof Error ? error.message : String(error)
+        log.warn(target.hostId, 'handshake', `SSH 连接异常（${target.hostname}:${target.port}），连接断开后将自动重连。`, detail)
+      }) as (...args: unknown[]) => void)
       client.connect(config)
     })
   }

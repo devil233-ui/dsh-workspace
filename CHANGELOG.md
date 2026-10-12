@@ -4,6 +4,10 @@
 
 ## 未发布
 
+### SSH 连接
+
+- 修复：远程工作区连接建立后，服务器侧断开连接（ECONNRESET）或保活超时会让整个 DSH 崩溃（宿主进程 exit 1，issue #6）。根因是 `rawDial` 握手成功后摘掉了 ssh2 Client 的 `error` 监听，已建立连接上的 `error` 无人接收成为未捕获异常。现在保留一个常驻监听只记 warn 日志（握手期错误仍由原逻辑记录并 reject，不重复记），断线回收与自动重连沿用连接池的 close / end 处理；跳板链每一跳同样受益。补回归测试 `src/ssh/connection.test.ts`。
+
 ### HTML 预览
 
 - 修复：HTML 预览出问题时只留一片白、看不出原因。`.html` / `.htm` 预览页注入纯 ASCII 的预览探针（`src/wire/preview-probe.ts`，桌面版在 srcdoc 内联时注入，网页版由预览路由对带 `?probe=1` 的主文档按 latin1 原字节插入、相对资源不受影响；页面自带 meta CSP、svg / xhtml 不注入），把页面脚本报错、资源加载失败、加载完成但正文为空、10 秒内未完成加载回报给查看器，显示在沙箱提示条下方；沙箱里访问 localStorage / cookie 被拒（SecurityError）时提示可临时解除沙箱，未加载时提示打开开发者工具（标题栏扳手菜单或 Ctrl+Shift+I）看 Console。
