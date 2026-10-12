@@ -36,6 +36,7 @@ import { setSidebarHost } from './host-bridge.js'
 import { turnCount, useAiChanges } from './ai-changes.js'
 import { registerSidechat } from '../sidechat/register.js'
 import { registerSshTabType, registerTerminalTakeover } from './terminal-takeover.js'
+import { registerTabEnhance } from '../tabs/register.js'
 
 interface TabRegistry {
   register(definition: {
@@ -447,6 +448,14 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
     log('安装任务页自动打开失败', error)
   }
 
+  // 标签右键菜单增强与固定标签（偏好 tabEnhance）：作用于所有停靠窗格标签（含宿主自带的文件 / 浏览器 / 终端等）。
+  let offTabEnhance: () => void = () => undefined
+  try {
+    offTabEnhance = registerTabEnhance(ctx, { t, index, filesKind: folderFilesKind }, log)
+  } catch (error) {
+    log('接入标签右键菜单增强失败', error)
+  }
+
   let offConversation: () => void = () => undefined
   try {
     offConversation = registerConversationTabs(ctx, { t, api, index, openResource }, log)
@@ -472,6 +481,7 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
   return () => {
     offTerminal()
     offSidechat()
+    offTabEnhance()
     setSidebarHost(undefined)
     offToolViews()
     offOpener()

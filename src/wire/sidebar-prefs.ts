@@ -63,6 +63,11 @@ export interface SidebarPrefs {
    */
   remoteSshTerminal: boolean
   /**
+   * 右侧栏标签右键菜单增强与固定标签（默认开）：右键菜单加关闭左侧 / 右侧 / 其他 / 全部、固定、文件类的复制路径与定位；
+   * 关闭后撤销菜单项与隐藏关闭按钮的样式、停止补开（固定记录保留在浏览器 localStorage）。
+   */
+  tabEnhance: boolean
+  /**
    * 侧边对话的分叉来源记录（父会话 → 子会话，方案 3.8）。宿主会话列表虽然也有 parentId，
    * 但 DSH 自带的「从这里分叉」也会产生同样的父子关系 —— 只有这里记下的才是「侧边对话」。
    */
@@ -102,6 +107,7 @@ export const DEFAULT_SIDEBAR_PREFS: SidebarPrefs = Object.freeze({
   autoRefresh: true,
   openWith: Object.freeze([]) as unknown as OpenWithTemplate[],
   remoteSshTerminal: true,
+  tabEnhance: true,
   sidechats: Object.freeze([]) as unknown as SidechatRecord[]
 }) as SidebarPrefs
 
@@ -152,6 +158,7 @@ export function normalizeSidebarPrefs(raw: unknown): SidebarPrefs {
     autoRefresh: bool(o.autoRefresh, d.autoRefresh),
     openWith: normalizeOpenWith(o.openWith),
     remoteSshTerminal: bool(o.remoteSshTerminal, d.remoteSshTerminal),
+    tabEnhance: bool(o.tabEnhance, d.tabEnhance),
     sidechats: normalizeSidechats(o.sidechats)
   }
 }

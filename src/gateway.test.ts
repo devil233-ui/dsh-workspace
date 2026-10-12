@@ -665,6 +665,16 @@ describe('文件接口', () => {
     expect(saved.sidebar.largeFileMB).toBe(40)
   })
 
+  it('标签右键菜单增强开关 tabEnhance：严格校验接受布尔、拒绝非布尔，保存后生效', async () => {
+    const d = HOST_MANIFEST.invocations.find((x) => x.method === 'setSidebarPrefs') as {
+      parameters: Array<{ codec: { schema: { parse(v: unknown): unknown } } }>
+    }
+    const schema = d.parameters[0]!.codec.schema
+    expect(() => schema.parse({ tabEnhance: 'no' })).toThrow()
+    const saved = await gw.setSidebarPrefs(schema.parse({ tabEnhance: false }) as never)
+    expect(saved.sidebar.tabEnhance).toBe(false)
+  })
+
   it('侧边栏偏好的输入校验是严格的：未知字段、非法查看器、超范围阈值都拒绝', () => {
     const d = HOST_MANIFEST.invocations.find((x) => x.method === 'setSidebarPrefs') as {
       parameters: Array<{ codec: { schema: { parse(v: unknown): unknown } } }>

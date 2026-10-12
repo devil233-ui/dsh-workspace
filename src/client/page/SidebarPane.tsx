@@ -114,6 +114,11 @@ export function SidebarPane(props: SidebarPaneProps) {
           control={<Switch checked={prefs.remoteSshTerminal} label={t('sbm.remoteSshTerminal')} onChange={(next) => save({ remoteSshTerminal: next })} />}
         />
         <SettingRow
+          title={t('sbm.tabEnhance')}
+          desc={t('sbm.tabEnhanceHint')}
+          control={<Switch checked={prefs.tabEnhance} label={t('sbm.tabEnhance')} onChange={(next) => save({ tabEnhance: next })} />}
+        />
+        <SettingRow
           title={t('settings.filesTakeover')}
           desc={
             <>

@@ -208,6 +208,7 @@ function sidebarPrefsPatch() {
       customCss: z.string().max(CUSTOM_CSS_MAX).optional(),
       autoRefresh: z.boolean().optional(),
       remoteSshTerminal: z.boolean().optional(),
+      tabEnhance: z.boolean().optional(),
       // 模板合法性（协议、禁用协议）在 normalizeSidebarPrefs → normalizeOpenWith 里再过滤一次。
       openWith: z
         .array(z.object({ name: z.string().trim().min(1).max(OPEN_WITH_NAME_MAX), template: z.string().trim().min(1).max(OPEN_URL_MAX) }).strict())

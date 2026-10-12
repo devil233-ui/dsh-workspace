@@ -62,6 +62,13 @@ describe('normalizeSidebarPrefs', () => {
     expect(mergeSidebarPrefs(DEFAULT_SIDEBAR_PREFS, { remoteSshTerminal: false }).remoteSshTerminal).toBe(false)
   })
 
+  it('标签右键菜单增强与固定：默认开，非布尔回默认，可关闭', () => {
+    expect(DEFAULT_SIDEBAR_PREFS.tabEnhance).toBe(true)
+    expect(normalizeSidebarPrefs({ tabEnhance: 1 }).tabEnhance).toBe(true)
+    expect(normalizeSidebarPrefs({ tabEnhance: false }).tabEnhance).toBe(false)
+    expect(mergeSidebarPrefs(DEFAULT_SIDEBAR_PREFS, { tabEnhance: false }).tabEnhance).toBe(false)
+  })
+
   it('已取消的底部 dock：残留的 tabs.dock 被丢弃，同一对象里的其他偏好照常保留', () => {
     expect(SIDEBAR_TAB_KEYS).not.toContain('dock')
     expect(RETIRED_SIDEBAR_TAB_KEYS).toContain('dock')
