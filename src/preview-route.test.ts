@@ -91,6 +91,38 @@ describe('预览路由', () => {
     expect(String((await get(previewUrl(token, '/home/ps/app/index.html'))).headers['content-security-policy'])).toContain('sandbox')
   })
 
+  it('?probe=1 的主文档注入预览探针（长度、编码正确，仍带 CSP sandbox）；不带参数与相对资源原样返回', async () => {
+    files['/home/ps/app/gbk.html'] = '<html><head><title>x</title></head><body>你好</body></html>'
+    const page = await get(`${previewUrl(token, '/home/ps/app/gbk.html')}?probe=1`)
+    expect(page.status).toBe(200)
+    expect(page.body).toContain('<head><script data-dshws-probe>')
+    expect(page.body).toContain('<body>你好</body>')
+    expect(Number(page.headers['content-length'])).toBe(Buffer.byteLength(page.body))
+    expect(String(page.headers['content-security-policy'])).toContain('sandbox allow-scripts')
+    const plain = await get(previewUrl(token, '/home/ps/app/gbk.html'))
+    expect(plain.body).toBe(files['/home/ps/app/gbk.html'])
+    const css = await get(`${previewUrl(token, '/home/ps/app/style.css')}?probe=1`)
+    expect(css.body).toBe('body{color:red}')
+  })
+
+  it('解除沙箱后同目录 worker.js / 模块脚本可取：MIME 为 JavaScript、不带 CSP sandbox（同源 → new Worker 可用）', async () => {
+    files['/home/ps/app/ex/worker.js'] = 'self.onmessage=()=>{}'
+    files['/home/ps/app/ex/lib.mjs'] = 'export const x=1'
+    const trusted = grants.grant('h1', '/home/ps/app', true)
+    // 页面 index.html 里 new Worker('worker.js') 按文档基址解析 = 同令牌同目录
+    const workerUrl = new URL('worker.js', `http://x${previewUrl(trusted, '/home/ps/app/ex/index.html')}`).pathname
+    const worker = await get(workerUrl)
+    expect(worker.status).toBe(200)
+    expect(worker.headers['content-type']).toBe('text/javascript; charset=utf-8')
+    expect(worker.headers['x-content-type-options']).toBe('nosniff')
+    expect(String(worker.headers['content-security-policy'])).not.toContain('sandbox')
+    const mod = await get(previewUrl(trusted, '/home/ps/app/ex/lib.mjs'))
+    expect(mod.headers['content-type']).toBe('text/javascript; charset=utf-8')
+    expect(mimeOf('a/b.JS')).toBe('text/javascript; charset=utf-8')
+    // 信任令牌同样不能逃出根目录
+    expect((await get(`/dsh-workspace/preview/${trusted}/home/ps/app/../../../etc/passwd`)).status).toBe(404)
+  })
+
   it('同一主机 + 根目录复用令牌；不同根目录不同令牌', () => {
     expect(grants.grant('h1', '/home/ps/app')).toBe(token)
     expect(grants.grant('h1', '/home/ps/other')).not.toBe(token)

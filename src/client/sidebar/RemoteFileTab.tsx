@@ -432,7 +432,7 @@ export function RemoteFileViewer(props: RemoteFileViewerProps) {
       />
     )
   } else if (plan.viewer === 'html') {
-    body = <HtmlPreview t={t} io={io} content={file?.content ?? null} path={remotePath} root={root} inline={desktop} nonce={nonce} />
+    body = <HtmlPreview t={t} io={io} content={file?.content ?? null} path={remotePath} root={root} desktop={desktop} nonce={nonce} />
   } else if (plan.viewer === 'file-viewer') {
     body = <FileViewerPane key={nonce} t={t} io={io} name={name} plan={plan} dark={dark} nonce={nonce} />
   } else if (plan.viewer === 'image') {

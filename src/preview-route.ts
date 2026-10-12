@@ -19,6 +19,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { posix } from 'node:path'
 import type { Readable } from 'node:stream'
 import { isTrustedRequest } from './terminal/trust-fence.js'
+import { withPreviewProbe } from './wire/preview-probe.js'
 
 /** 不带结尾斜杠（宿主前缀匹配规则见 contract.ts 的 SFTP_HTTP_PREFIX）。 */
 export const PREVIEW_PREFIX = '/dsh-workspace/preview'
@@ -163,9 +164,22 @@ export function createPreviewHandler(deps: PreviewDeps) {
       res.writeHead(413).end()
       return
     }
+    const type = mimeOf(parsed.remotePath)
+    // ?probe=1（查看器加载的主文档）：注入预览探针，页面报错 / 空白时查看器能提示原因（见 wire/preview-probe.ts）。
+    // 按 latin1 在原始字节里插入纯 ASCII 脚本，不改动页面自身的编码；相对资源请求不带该参数，原样返回。
+    let body: Buffer | undefined
+    if (type.startsWith('text/html') && req.method === 'GET' && new URL(req.url ?? '/', 'http://x').searchParams.get('probe') === '1') {
+      try {
+        const raw = await readAll(opened.stream)
+        body = Buffer.from(withPreviewProbe(raw.toString('latin1')), 'latin1')
+      } catch {
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('not found')
+        return
+      }
+    }
     res.writeHead(200, {
-      'Content-Type': mimeOf(parsed.remotePath),
-      'Content-Length': opened.size,
+      'Content-Type': type,
+      'Content-Length': body?.length ?? opened.size,
       'Cache-Control': 'no-cache',
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'no-referrer',
@@ -173,6 +187,10 @@ export function createPreviewHandler(deps: PreviewDeps) {
         ? "object-src 'none'"
         : "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; object-src 'none'"
     })
+    if (body !== undefined) {
+      res.end(body)
+      return
+    }
     if (req.method === 'HEAD') {
       opened.stream.destroy()
       res.end()
@@ -181,4 +199,10 @@ export function createPreviewHandler(deps: PreviewDeps) {
     opened.stream.on('error', () => res.destroy())
     opened.stream.pipe(res)
   }
+}
+
+async function readAll(stream: Readable): Promise<Buffer> {
+  const chunks: Buffer[] = []
+  for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string))
+  return Buffer.concat(chunks)
 }

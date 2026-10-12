@@ -4,6 +4,13 @@
 
 ## 未发布
 
+### HTML 预览
+
+- 修复：HTML 预览出问题时只留一片白、看不出原因。`.html` / `.htm` 预览页注入纯 ASCII 的预览探针（`src/wire/preview-probe.ts`，桌面版在 srcdoc 内联时注入，网页版由预览路由对带 `?probe=1` 的主文档按 latin1 原字节插入、相对资源不受影响；页面自带 meta CSP、svg / xhtml 不注入），把页面脚本报错、资源加载失败、加载完成但正文为空、10 秒内未完成加载回报给查看器，显示在沙箱提示条下方；沙箱里访问 localStorage / cookie 被拒（SecurityError）时提示可临时解除沙箱，未加载时提示打开开发者工具（标题栏扳手菜单或 Ctrl+Shift+I）看 Console。
+- 改进：预览 iframe 的渲染决策抽成纯函数 `framePlan`（`src/client/viewers/html-frame.ts`），键同时包含 nonce 与沙箱状态（解除 / 恢复沙箱、保存、刷新都重建浏览上下文），补回归测试（探针注入位置、沙箱切换换键、预览路由注入后长度与 CSP）。
+- 修复：Windows 桌面版（兼容模式页面是 `http://127.0.0.1:<端口>`）解除沙箱后，页面里 `new Worker('worker.js')`、`fetch`、动态 `import` 等运行时相对地址解析到 DSH 根目录（如 comlink 示例报 `Failed to construct 'Worker'`）。根因是桌面版一律走 srcdoc，srcdoc 文档基址是父页面地址。现在加载方式由 `frameLoadMode` 决定：http(s) 页面上网页版两种模式、桌面版解除沙箱都让 iframe 直接加载预览路由（文档基址 = 文件所在目录，同源，Worker 可用）；桌面版沙箱仍走 srcdoc 内联（不透明源的请求拿不到桌面渲染进程令牌，关闭「允许浏览器访问」时会被拒），非 http(s) 页面（dsh-app:// / file:）走 srcdoc；srcdoc 能拿到预览路由时注入 `<base href>` 指向文件目录（尽力而为，页面自带 `<base>` 时不覆盖；签发失败不报错，照常内联）。
+- 改进：探针提示分类（`probeNotes`）：沙箱下报错含 `origin 'null'` / SecurityError / Worker / 内联模块导入失败 / localStorage / sessionStorage / cookie 时追加「该页面需要同源能力，请点击『临时解除沙箱』」；页面有自己的脚本但没有可见元素时改为中性说明「页面没有可见元素（内容可能由脚本弹窗或控制台输出）」，不再按故障提示（探针统计可见元素时排除 script / style 等，并回报脚本数）。沙箱 iframe 与预览路由 CSP sandbox 均含 `allow-modals`（alert / confirm / prompt 不再被静默忽略，仍无 `allow-same-origin`）。
+
 ### 右侧栏标签右键菜单与固定标签
 
 - 新增：右侧栏标签右键菜单（宿主「关闭」之后，分隔线开头）增加「关闭左侧 / 关闭右侧 / 关闭其他 / 关闭全部」——只作用于该标签所在窗格、跳过固定标签，没有可关闭目标时禁用；以及「固定 / 取消固定」。文件类标签（插件文件查看器、宿主文档预览等 `dsh-resource://file/...` 地址）另有「复制路径」「在文件管理中显示」（文件不在当前会话工作区内或文件管理未开启时禁用；远程工作区会话不提供「在文件管理中显示」，只保留「复制路径」）。对所有停靠窗格标签生效（含宿主文件 / 浏览器 / 终端）。
