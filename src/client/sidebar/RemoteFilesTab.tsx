@@ -128,12 +128,13 @@ export function RemoteFilesTab(props: SidebarBodyProps) {
       if (root === undefined) return false
       const plan = revealPlan(root, target)
       if (plan === undefined) return false
-      const list = expandSelf ? [...plan.dirs, target] : plan.dirs
+      // 用规范化后的定位路径（plan.target）：链接里的 ..、重复斜杠、盘符大小写都会让原样字符串对不上树里的行。
+      const list = expandSelf ? [...plan.dirs, plan.target] : plan.dirs
       setExpanded((cur) => new Set([...cur, ...list]))
       for (const dir of [root, ...list]) void loadDir(dir)
       // 目标在隐藏目录里时打开「显示隐藏文件」（否则目标行不渲染）；用户随时可以再关掉。
       if (plan.hidden) setShowHidden(true)
-      setFocus({ path: target, nonce: Date.now() })
+      setFocus({ path: plan.target, nonce: Date.now() })
       return true
     },
     [root, loadDir]

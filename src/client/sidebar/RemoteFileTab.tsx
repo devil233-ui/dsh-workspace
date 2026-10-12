@@ -6,7 +6,7 @@
  * 分派规则见 viewers/dispatch.ts（文件关联、大文件阈值、HTML 沙箱等偏好的默认值在 viewers/defaults.ts）。
  * 读写通道见 viewers/io.ts：远程走 SFTP；本机任意路径可读、写入只限当前会话工作区。
  */
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { Translate } from '../context.js'
 import type { WorkspaceApi } from '../api.js'
 import { RemoteCallError } from '../api.js'
@@ -20,12 +20,31 @@ import { FileIcon, IconButton, IconClose, IconDownload, IconRefresh } from './ui
 import { fileIO } from '../viewers/io.js'
 import { initialViewMode, planViewer } from '../viewers/dispatch.js'
 import { getViewerPrefs, subscribeViewerPrefs } from '../viewers/prefs.js'
+import { folderAction, probeDirectory, type FolderAction } from './folder-redirect.js'
+import { revealParams } from './open-in-sidebar.js'
+import { openInApp, openInAppAvailable } from './host-bridge.js'
+import { copyText } from './ContextMenu.js'
 import { MarkdownPreview } from '../viewers/MarkdownPreview.js'
 import { HtmlPreview } from '../viewers/HtmlPreview.js'
 import { DownloadPane, FileViewerPane, ImagePane, MediaPane } from '../viewers/BinaryPanes.js'
 
+/** 宿主标签自身的动作（dsh-client-ui-sidebar-right 的 tabActions；旧宿主没有）。 */
+export interface SidebarTabActions {
+  /** replaceTab: true = 在本标签所在窗格原位替换本标签（宿主 place() 把它换成本标签 id）。 */
+  openTab?(kind: string, options?: { replaceTab?: boolean; params?: unknown; revealIfOpened?: boolean }): void
+  close?(): void
+}
+
 export interface SidebarTabInfo {
-  tab: { id: string; kind: string; title: string; contentId: string; visible?: boolean; navigation?: { params?: unknown; revision?: number } }
+  tab: {
+    id: string
+    kind: string
+    title: string
+    contentId: string
+    visible?: boolean
+    navigation?: { params?: unknown; revision?: number }
+    actions?: SidebarTabActions
+  }
 }
 
 export interface SidebarBodyProps {
@@ -37,6 +56,10 @@ export interface SidebarBodyProps {
   sessionId: string
   /** 右侧栏标签才有；会话顶部标签没有。 */
   useTabInfo?(): SidebarTabInfo
+  /** 「文件管理」标签的 kind（接管宿主「文件」侧栏时是 files）；未启用返回 undefined。查看器遇到文件夹时用。 */
+  folderFilesKind?(): string | undefined
+  /** 旧宿主没有 tab.actions 时打开「文件管理」的退路。 */
+  openFilesTab?(kind: string, params: Record<string, unknown>): void
 }
 
 function messageOf(error: unknown): string {
@@ -77,9 +100,7 @@ export function navOf(navigation: { params?: unknown; revision?: number } | unde
 }
 
 /**
- * 右侧栏文件标签：解析地址后交给查看器。
- * - 远程工作区会话（或远程占位目录）里的地址 → 远程文件；
- * - 其余本机地址 → 本机文件：在当前（地址所属 / 标签所在）会话工作区内的可保存，工作区外只读。
+ * 右侧栏文件标签：解析地址后交给查看器（规则见 viewerTargetOf）；目标是文件夹时改开「文件管理」（见 folder-redirect.ts）。
  */
 export function RemoteFileTab(props: SidebarBodyProps) {
   const { t, api, index } = props
@@ -87,40 +108,180 @@ export function RemoteFileTab(props: SidebarBodyProps) {
   useIndexVersion(index)
   const address = info.tab.contentId
   const nav = navOf(info.tab.navigation)
-  const resolved = index.resolveAddress(address)
-  if (resolved !== undefined) {
+  const target = viewerTargetOf(index, address, props.sessionId, t)
+  // 先探测目标是不是文件夹（聊天链接 / openFile 打开前宿主不知道类型），探测结束前不挂载查看器，避免闪出「只能预览普通文件」。
+  const probe = useDirectoryProbe(api, target?.hostId, target?.path)
+  if (target === undefined) return <div className="dshws-side-note">{t('side.notRemote')}</div>
+  if (probe === 'pending') return <div className="dshws-tree-note">{t('files.loading')}</div>
+  if (probe === 'dir') {
+    // 「文件管理」显示的是标签所在会话的工作区：远程目标还要求是同一台主机，否则无法在那棵树里定位。
+    const ws = index.workspaceFor(props.sessionId)
+    const root = ws === undefined || ws.local !== target.local || (!ws.local && ws.hostId !== target.hostId) ? undefined : ws.remotePath
     return (
-      <RemoteFileViewer
-        key={`${resolved.workspace.hostId}:${resolved.remotePath}`}
-        nav={nav}
+      <FolderRedirect
+        key={`${target.hostId}:${target.path}`}
         t={t}
-        api={api}
-        hostId={resolved.workspace.hostId}
-        remotePath={resolved.remotePath}
-        workspaceTitle={resolved.workspace.title}
-        workspaceRoot={resolved.workspace.remotePath}
+        tab={info.tab}
+        path={target.path}
+        local={target.local}
+        action={folderAction(root, target.path, target.local)}
+        filesKind={props.folderFilesKind?.()}
+        openFilesTab={props.openFilesTab}
       />
     )
   }
-  const local = index.resolveLocalAddress(address)
-  if (local === undefined) return <div className="dshws-side-note">{t('side.notRemote')}</div>
-  // 可写的会话：地址自带的会话，或（absolute 地址）标签所在的会话；文件必须在它的 cwd 内。
-  const sessionId = local.sessionId ?? props.sessionId
-  const cwd = local.cwd ?? index.sessionCwd(sessionId)
-  const inside = cwd !== undefined && cwd !== '' && index.bySession(sessionId) === undefined && isInsideLocal(cwd, local.path)
-  const hostId = inside ? `${LOCAL_HOST_PREFIX}${sessionId}` : LOCAL_ANY_HOST
-  const root = inside ? toLocalPosix(cwd as string) : local.path.slice(0, Math.max(local.path.lastIndexOf('/'), 1))
   return (
     <RemoteFileViewer
-      key={`${hostId}:${local.path}`}
+      key={`${target.hostId}:${target.path}`}
       nav={nav}
       t={t}
       api={api}
-      hostId={hostId}
-      remotePath={local.path}
-      workspaceTitle={inside ? baseName(toLocalPosix(cwd as string)) : t('viewer.localFile')}
-      workspaceRoot={root}
+      hostId={target.hostId}
+      remotePath={target.path}
+      workspaceTitle={target.title}
+      workspaceRoot={target.root}
     />
+  )
+}
+
+interface ViewerTarget {
+  hostId: string
+  path: string
+  title: string
+  root: string
+  local: boolean
+}
+
+/**
+ * 地址 → 查看器目标。
+ * - 远程工作区会话（或远程占位目录）里的地址 → 远程文件；
+ * - 其余本机地址 → 本机文件：在当前（地址所属 / 标签所在）会话工作区内的可保存，工作区外只读。
+ */
+function viewerTargetOf(index: RemoteIndex, address: string, tabSession: string, t: Translate): ViewerTarget | undefined {
+  const resolved = index.resolveAddress(address)
+  if (resolved !== undefined) {
+    return { hostId: resolved.workspace.hostId, path: resolved.remotePath, title: resolved.workspace.title, root: resolved.workspace.remotePath, local: false }
+  }
+  const local = index.resolveLocalAddress(address)
+  if (local === undefined) return undefined
+  // 可写的会话：地址自带的会话，或（absolute 地址）标签所在的会话；文件必须在它的 cwd 内。
+  const sessionId = local.sessionId ?? tabSession
+  const cwd = local.cwd ?? index.sessionCwd(sessionId)
+  const inside = cwd !== undefined && cwd !== '' && index.bySession(sessionId) === undefined && isInsideLocal(cwd, local.path)
+  return {
+    hostId: inside ? `${LOCAL_HOST_PREFIX}${sessionId}` : LOCAL_ANY_HOST,
+    path: local.path,
+    title: inside ? baseName(toLocalPosix(cwd as string)) : t('viewer.localFile'),
+    root: inside ? toLocalPosix(cwd as string) : local.path.slice(0, Math.max(local.path.lastIndexOf('/'), 1)),
+    local: true
+  }
+}
+
+/** 探测超时：后台卡住时不能让查看器一直停在「加载中」，超时按文件处理（与探测失败相同）。 */
+const PROBE_TIMEOUT_MS = 4000
+
+type Probe = 'pending' | 'dir' | 'file'
+
+function useDirectoryProbe(api: WorkspaceApi, hostId: string | undefined, path: string | undefined): Probe {
+  const key = hostId === undefined || path === undefined ? undefined : `${hostId}\n${path}`
+  const [result, setResult] = useState<{ key: string; value: Probe } | undefined>(undefined)
+  useEffect(() => {
+    if (hostId === undefined || path === undefined || key === undefined) return
+    let alive = true
+    const timer = setTimeout(() => alive && setResult({ key, value: 'file' }), PROBE_TIMEOUT_MS)
+    void probeDirectory(api, hostId, path).then((dir) => {
+      clearTimeout(timer)
+      if (alive) setResult((prev) => (prev?.key === key ? prev : { key, value: dir ? 'dir' : 'file' }))
+    })
+    return () => {
+      alive = false
+      clearTimeout(timer)
+    }
+  }, [api, hostId, path, key])
+  // 地址变了（同一标签被导航到别的目标）：旧结果作废，重新探测。
+  return result !== undefined && result.key === key ? result.value : 'pending'
+}
+
+interface FolderRedirectProps {
+  t: Translate
+  tab: SidebarTabInfo['tab']
+  path: string
+  local: boolean
+  action: FolderAction
+  filesKind: string | undefined
+  openFilesTab?(kind: string, params: Record<string, unknown>): void
+}
+
+/**
+ * 目标是文件夹：能在「文件管理」里定位就原位替换本标签（tab.actions.openTab + replaceTab，同一窗格、同一位置，无闪烁）；
+ * 不在工作区内 / 文件管理未启用时提示，并提供「在系统文件管理器中打开」（仅本机且宿主支持）与「复制路径」。
+ */
+function FolderRedirect(props: FolderRedirectProps) {
+  const { t, tab, action, filesKind } = props
+  const shown = displayPath(props.path)
+  const redirect = action.kind === 'reveal' && filesKind !== undefined
+  const done = useRef(false)
+  const [failed, setFailed] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [osOpen, setOsOpen] = useState(false)
+
+  useEffect(() => {
+    if (!redirect || done.current || action.kind !== 'reveal' || filesKind === undefined) return
+    done.current = true
+    const params = revealParams(action.target, true, Date.now())
+    try {
+      if (typeof tab.actions?.openTab === 'function') {
+        tab.actions.openTab(filesKind, { replaceTab: true, params })
+      } else if (props.openFilesTab !== undefined) {
+        // 旧宿主：没有原位替换，只能另开「文件管理」；本标签留着提示（也关不掉自己）。
+        props.openFilesTab(filesKind, params)
+      } else {
+        setFailed(true)
+      }
+    } catch {
+      setFailed(true)
+    }
+    // 只在挂载时执行一次：标签被替换后本组件随之卸载
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    if (!props.local) return
+    let live = true
+    void openInAppAvailable().then((ok) => live && setOsOpen(ok))
+    return () => {
+      live = false
+    }
+  }, [props.local])
+
+  if (redirect && !failed) return <div className="dshws-tree-note">{t('side.folderOpened')}</div>
+  const reason = action.kind === 'outside' ? t('side.folderOutside') : t('side.folderNoTree')
+  return (
+    <div className="dshws-side">
+      <div className="dshws-subbar dshws-mono" title={shown}>
+        {shown}
+      </div>
+      <div className="dshws-tree-note">{reason}</div>
+      <div className="dshws-tree-note">
+        {props.local && osOpen ? (
+          <button
+            type="button"
+            className="dshws-link-btn"
+            onClick={() => void openInApp(shown).then((ok) => setNotice(ok ? null : t('side.folderOsFailed')))}
+          >
+            {t('side.folderOpenInOs')}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="dshws-link-btn"
+          onClick={() => void copyText(shown).then(() => setNotice(t('ctx.copiedPath')), () => setNotice(t('side.folderCopyFailed')))}
+        >
+          {t('side.folderCopyPath')}
+        </button>
+      </div>
+      {notice !== null ? <div className="dshws-tree-note">{notice}</div> : null}
+    </div>
   )
 }
 

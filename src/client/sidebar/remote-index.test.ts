@@ -9,10 +9,10 @@ import { centeredScrollTop } from './VirtualList.js'
 
 describe('显示文件位置：定位计划与滚动', () => {
   it('展开从根到父目录的每一级；点开头的段需要显示隐藏文件；根外 / 根本身不定位', () => {
-    expect(revealPlan('/srv/app', '/srv/app/public/img/a.png')).toEqual({ dirs: ['/srv/app/public', '/srv/app/public/img'], hidden: false })
-    expect(revealPlan('/srv/app/', '/srv/app/a.png')).toEqual({ dirs: [], hidden: false })
-    expect(revealPlan('/srv/app', '/srv/app/.github/wf.yml')).toEqual({ dirs: ['/srv/app/.github'], hidden: true })
-    expect(revealPlan('/', '/etc/hosts')).toEqual({ dirs: ['/etc'], hidden: false })
+    expect(revealPlan('/srv/app', '/srv/app/public/img/a.png')).toEqual({ dirs: ['/srv/app/public', '/srv/app/public/img'], hidden: false, target: '/srv/app/public/img/a.png' })
+    expect(revealPlan('/srv/app/', '/srv/app/a.png')).toEqual({ dirs: [], hidden: false, target: '/srv/app/a.png' })
+    expect(revealPlan('/srv/app', '/srv/app/.github/wf.yml')).toEqual({ dirs: ['/srv/app/.github'], hidden: true, target: '/srv/app/.github/wf.yml' })
+    expect(revealPlan('/', '/etc/hosts')).toEqual({ dirs: ['/etc'], hidden: false, target: '/etc/hosts' })
     expect(revealPlan('/srv/app', '/srv/apple/a')).toBeUndefined()
     expect(revealPlan('/srv/app', '/srv/app')).toBeUndefined()
   })
@@ -148,13 +148,12 @@ describe('本地工作区（文件管理 / Git 仓库）', () => {
   })
 })
 describe('本机文件地址（查看器统一）', () => {
-  it('session 范围：相对路径按 cwd 拼接，绝对路径原样；远程会话 / 会话根 / 无 cwd 的相对路径不认领', async () => {
+  it('session 范围：相对路径按 cwd 拼接，绝对路径原样；远程会话 / 无 cwd 的相对路径不认领', async () => {
     const index = indexWith({ s1: { cwd: 'C:\\DshChat\\proj' }, r: { cwd: ws.localPath }, none: {} })
     await index.refresh()
     expect(index.resolveLocalAddress(sessionFileAddress('s1', 'src/a.ts'))).toEqual({ path: '/C:/DshChat/proj/src/a.ts', sessionId: 's1', cwd: 'C:\\DshChat\\proj' })
     expect(index.resolveLocalAddress(sessionFileAddress('s1', 'D:/Downloads/a.pdf'))?.path).toBe('/D:/Downloads/a.pdf')
     expect(index.resolveLocalAddress(sessionFileAddress('s1', 'src/../b.md'))?.path).toBe('/C:/DshChat/proj/b.md')
-    expect(index.resolveLocalAddress(sessionFileAddress('s1', ''))).toBeUndefined()
     expect(index.resolveLocalAddress(sessionFileAddress('r', 'a.ts'))).toBeUndefined()
     expect(index.resolveLocalAddress(sessionFileAddress('none', 'a.ts'))).toBeUndefined()
   })
@@ -179,5 +178,72 @@ describe('本机文件地址（查看器统一）', () => {
     expect(isInsideLocal('C:\\DshChat\\proj', '/C:/DshChat/project/a.ts')).toBe(false)
     expect(isInsideLocal('/home/me', '/home/Me/a')).toBe(false)
     expect(isInsideLocal('/home/me', '/home/me')).toBe(true)
+  })
+})
+describe('工作区根本身与路径规范化（链接指向工作区根时报「path is required」的修复）', () => {
+  const winCwd = 'C:/TestChat/'
+  async function winIndex() {
+    const index = indexWith({ w: { cwd: winCwd }, lx: { cwd: '/home/me/Proj' }, r: { cwd: ws.localPath } })
+    await index.refresh()
+    return index
+  }
+
+  it('宿主 fileAddressFor 对根生成空相对路径：.../session/<id>/ 与缺结尾 / 的地址都解析成空路径', () => {
+    expect(parseFileAddress('dsh-resource://file/session/w/')).toEqual({ scope: 'session', sessionId: 'w', path: '' })
+    expect(parseFileAddress('dsh-resource://file/session/w')).toEqual({ scope: 'session', sessionId: 'w', path: '' })
+    expect(parseFileAddress('dsh-resource://file/session/w?x=1')).toEqual({ scope: 'session', sessionId: 'w', path: '' })
+    expect(parseFileAddress('dsh-resource://file/session/')).toBeUndefined()
+  })
+
+  it('本机会话：根的各种写法都认领为工作区根（不再交给宿主查看器读空路径）', async () => {
+    const index = await winIndex()
+    for (const p of ['', '.', './', './/', 'C:/TestChat/', 'C:/TestChat', 'c:\\TestChat', 'c:\\testchat\\', 'C:/TestChat/./', 'C://TestChat//', 'C:/TestChat/aaa/..']) {
+      const hit = index.resolveLocalAddress(sessionFileAddress('w', p.replace(/\\/g, '/')))
+      expect(hit?.path.toLowerCase(), p).toBe('/c:/testchat')
+      expect(isInsideLocal(winCwd, hit?.path ?? ''), p).toBe(true)
+    }
+    // 反斜杠写法原样进地址（不经 sessionFileAddress 规范化）也一样
+    expect(index.resolveLocalAddress('dsh-resource://file/session/w/c:%5CTestChat%5C')?.path).toBe('/c:/TestChat')
+  })
+
+  it('本机会话：子路径规范化；.. 逃逸、前缀相似目录（TestChat2）不算工作区内', async () => {
+    const index = await winIndex()
+    expect(index.resolveLocalAddress(sessionFileAddress('w', 'aaa'))?.path).toBe('/C:/TestChat/aaa')
+    expect(index.resolveLocalAddress(sessionFileAddress('w', './aaa//bbb/'))?.path).toBe('/C:/TestChat/aaa/bbb')
+    const up = index.resolveLocalAddress(sessionFileAddress('w', '../TestChat2'))?.path as string
+    expect(up).toBe('/C:/TestChat2')
+    expect(isInsideLocal(winCwd, up)).toBe(false)
+    expect(isInsideLocal(winCwd, '/C:/TestChat2/a')).toBe(false)
+    expect(isInsideLocal(winCwd, '/C:/TestChat/../TestChat2')).toBe(false)
+    // 盘符根之上的 .. 停在盘符，不会变成另一个 POSIX 路径
+    expect(index.resolveLocalAddress(sessionFileAddress('w', '../../../x'))?.path).toBe('/C:/x')
+    expect(normalizePosix('/C:/a/../../..')).toBe('/C:')
+  })
+
+  it('Linux / macOS 本机：/ 开头、区分大小写', async () => {
+    const index = await winIndex()
+    expect(index.resolveLocalAddress(sessionFileAddress('lx', ''))?.path).toBe('/home/me/Proj')
+    expect(index.resolveLocalAddress(sessionFileAddress('lx', '/home/me/Proj/'))?.path).toBe('/home/me/Proj')
+    expect(isInsideLocal('/home/me/Proj', '/home/me/proj')).toBe(false)
+    expect(isInsideLocal('/home/me/Proj', '/home/me/Proj2')).toBe(false)
+    expect(isInsideLocal('/home/me/Proj', '/home/me/Proj/../x')).toBe(false)
+  })
+
+  it('远程会话：链接指向远程根本身（含空路径 / . / 结尾斜杠 / 无斜杠）都解析到远程根', async () => {
+    const index = await winIndex()
+    for (const p of ['', '.', './', '/home/ps/testdsh/', '/home/ps/testdsh', '/home/ps/testdsh//./']) {
+      expect(index.resolveAddress(sessionFileAddress('r', p))?.remotePath, p).toBe('/home/ps/testdsh')
+    }
+    expect(index.resolveAddress('dsh-resource://file/session/r')?.remotePath).toBe('/home/ps/testdsh')
+    expect(index.resolveAddress(sessionFileAddress('r', '../testdsh2'))?.remotePath).toBe('/home/ps/testdsh2')
+  })
+
+  it('revealPlan：规范化后比较；根本身、.. 逃逸、前缀相似目录不定位；Windows 根只差大小写时沿用根的写法', () => {
+    expect(revealPlan('/C:/TestChat', '/C:/TestChat/')).toBeUndefined()
+    expect(revealPlan('/C:/TestChat', '/C:/TestChat2/a')).toBeUndefined()
+    expect(revealPlan('/C:/TestChat', '/C:/TestChat/a/../../x')).toBeUndefined()
+    expect(revealPlan('/C:/TestChat', '/c:/testchat/aaa/b.ts')).toEqual({ dirs: ['/C:/TestChat/aaa'], hidden: false, target: '/C:/TestChat/aaa/b.ts' })
+    expect(revealPlan('/home/ps/testdsh', '/home/ps/testdsh/./a//b')).toEqual({ dirs: ['/home/ps/testdsh/a'], hidden: false, target: '/home/ps/testdsh/a/b' })
+    expect(revealPlan('/home/ps/testdsh', '/home/ps/TestDsh/a')).toBeUndefined()
   })
 })

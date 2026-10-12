@@ -42,6 +42,9 @@
 - 新增：file-viewer 兜底渲染器（`src/client/viewers/lazy/fallback-renderers.ts`）—— 支持矩阵里未装配的类别（`.ppt` / `.pot`、CAD、3D、电子书等，定义复用 core 格式表）统一显示「该格式不支持在线预览，请下载后用系统应用打开」（中英文跟随查看器语言）；压缩包内的代码 / Markdown 等文本类别解码为纯文本（最多 2MB，含 NUL 字节视为二进制）。压缩包内预览与自定义关联都不再出现「尚未装配 xx renderer」的集成方提示。
 - 新增：分派白名单 `FILE_VIEWER_EXTS`（`src/client/viewers/dispatch.ts`，与装配的渲染器定义由单测校验一致）：用户把扩展名关联到 file-viewer、但该格式未装配时，文本类退回 Monaco，其余退回下载。
 - 文档：查看器第三方声明（`lib/assets/viewers/fv/NOTICE.md`，由 `scripts/build-viewers.mjs` 生成）补充 `@file-viewer/doc`（MIT）与 heic2any 内含 libheif（LGPL-3.0）的说明；`scripts/verify-viewers-browser.mjs` 新增兜底提示 / 纯文本兜底 / 不出现「尚未装配」检查，设置 `DSHWS_DOC_FIXTURE` 时另验证 .doc 正文渲染。
+- 修复：会话消息里指向**文件夹**的文件链接（以及 `dshWorkspace.openFile`、远程交付卡片「打开」等经查看器打开的地址）点击后显示「只能预览普通文件」。宿主打开前不知道目标类型，现在查看器挂载前先探测（远程 / 本机工作区内用 `sftpDirStamps`，本机工作区外用 `localList`，不新增网关方法）：是目录就用宿主标签动作 `tab.actions.openTab(文件管理, { replaceTab: true })` 在同一窗格原位替换为「文件管理」并定位 + 展开该文件夹（导航参数与 `open_in_sidebar` 文件夹分支共用 `revealParams`）；旧宿主没有标签动作时另开「文件管理」。文件夹不在标签所在会话的工作区内（或远程主机不同、文件管理未启用）时提示原因，并提供「在系统文件管理器中打开」（仅本机且宿主支持 open-in-app）与「复制路径」。探测失败（不存在 / 无权限）照常交给查看器显示原有错误；分支判断抽为纯函数 `folderAction`（`src/client/sidebar/folder-redirect.ts`，带单测）。
+- 修复：链接指向**工作区根目录本身**（如工作区 `C:/TestChat/` 下的 `[TestChat](<C:/TestChat/>)`）点击后右栏报「读取失败：path is required」。根因：宿主 `fileAddressFor` 对等于工作区根的路径生成空相对路径（`dsh-resource://file/session/<id>/`），本插件 `resolveLocalAddress` 不认领空路径，地址落到宿主自带查看器，它拿空路径调用工作区读接口被拒。现在空路径 / `.` / `./` / 结尾斜杠 / 反斜杠 / 重复斜杠一律规范化，空与 `.` 视为工作区根并由本插件认领，探测为目录后只打开「文件管理」不定位；地址缺结尾 `/`（`.../session/<id>`）也能解析；远程会话链接指向远程根（`/home/ps/testdsh/`）同样定位到根。
+- 修复：文件夹定位不能跳出工作区。`folderAction`、`isInsideLocal`、`revealPlan` 改为先规范化（统一分隔符、折叠 `.` / `..`、Windows 盘符段不被 `..` 弹出、Windows 不区分大小写、Linux / macOS 区分）再带 `/` 边界比较，`C:/TestChat/../TestChat2`、`C:/TestChat2` 不再被当成 `C:/TestChat` 内；`open_in_sidebar` 文件夹与 `dshWorkspace.reveal` 改用同一判断，工作区根只打开文件管理，工作区外改按地址打开、由查看器提示「不在工作区内」并提供复制路径 / 系统打开。服务端读接口的工作区限制不变。
 
 ### 文件管理（文件树）
 

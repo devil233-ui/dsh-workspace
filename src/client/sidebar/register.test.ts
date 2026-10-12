@@ -89,8 +89,10 @@ describe('registerRemoteSidebar', () => {
     expect(canOpen(sessionFileAddress('local', 'src/a.ts'))).toBe(true)
     expect(canOpen(sessionFileAddress('local', 'D:/Downloads/a.pdf'))).toBe(true)
     expect(canOpen('dsh-resource://file/absolute/D:/Downloads/a.pdf')).toBe(true)
-    // 会话根目录本身（目录）、没有 cwd 的会话里的相对路径：交还宿主。
-    expect(canOpen(sessionFileAddress('local', ''))).toBe(false)
+    // 会话根目录本身（宿主对根生成空相对路径）：本插件认领，查看器探测到目录后改开文件管理 —— 交还宿主会读空路径报「path is required」。
+    expect(canOpen(sessionFileAddress('local', ''))).toBe(true)
+    expect(canOpen('dsh-resource://file/session/local')).toBe(true)
+    // 没有 cwd 的会话里的相对路径：交还宿主。
     expect(canOpen(sessionFileAddress('none', 'a.ts'))).toBe(false)
     // 远程会话里的非工作区 Windows 路径不认领（原修复点）。
     expect(canOpen(sessionFileAddress('remote', 'D:/elsewhere/a.ts'))).toBe(false)

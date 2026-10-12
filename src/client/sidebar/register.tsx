@@ -137,7 +137,24 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
     const right = ctx.get('sidebarRight') as SidebarRight | undefined
     right?.openResource?.(address, { revealIfOpened: true })
   }
-  const inject = (sessionId: string) => ({ t, api, index, openResource, sessionId })
+  const hasKind = (kind: string): boolean => {
+    const tabs = ctx.get('sidebarRightTabs') as TabRegistry | undefined
+    if (tabs === undefined) return false
+    // 旧宿主的注册表没有 get：无法判断时照常打开（未注册的 kind 宿主自己忽略）。
+    return typeof tabs.get === 'function' ? tabs.get(kind) !== undefined : true
+  }
+  // 接管了 DSH「文件」侧栏时打开接管的那个标签，避免同时出现两个文件树。
+  const filesKind = (): string => (filesTakeover.status().state === 'active' ? FILES_KIND : FILES_ID)
+  // 查看器遇到文件夹地址时改开「文件管理」（见 folder-redirect.ts）：文件管理被偏好关闭（未注册）时返回 undefined，查看器改为提示。
+  const folderFilesKind = (): string | undefined => {
+    const kind = filesKind()
+    return hasKind(kind) ? kind : undefined
+  }
+  // 旧宿主的标签没有 tab.actions（无法原位替换）时的退路：照常在当前会话打开「文件管理」。
+  const openFilesTab = (kind: string, params: Record<string, unknown>): void => {
+    ;(ctx.get('sidebarRight') as SidebarRight | undefined)?.openTab?.(kind, { params, revealIfOpened: true })
+  }
+  const inject = (sessionId: string) => ({ t, api, index, openResource, sessionId, folderFilesKind, openFilesTab })
   // 任务页用到的宿主客户端服务：每次调用现取并做结构探测（服务可能晚于本插件提供）。
   const tasksHost = createTasksHost(ctx)
 
@@ -145,15 +162,9 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
   const opener = createSidebarOpener({
     index,
     right: () => ctx.get('sidebarRight') as SidebarRight | undefined,
-    hasKind: (kind) => {
-      const tabs = ctx.get('sidebarRightTabs') as TabRegistry | undefined
-      if (tabs === undefined) return false
-      // 旧宿主的注册表没有 get：无法判断时照常打开（未注册的 kind 宿主自己忽略）。
-      return typeof tabs.get === 'function' ? tabs.get(kind) !== undefined : true
-    },
+    hasKind,
     currentSession: () => (ctx.get('uiSession') as { adapter?: { current?: CurrentSession } } | undefined)?.adapter?.current?.getSnapshot()?.key,
-    // 接管了 DSH「文件」侧栏时打开接管的那个标签，避免同时出现两个文件树。
-    filesKind: () => (filesTakeover.status().state === 'active' ? FILES_KIND : FILES_ID)
+    filesKind
   })
   const offOpener = setWorkspaceOpener(opener)
   let offToolViews: () => void = () => undefined
@@ -181,8 +192,7 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
         return shown !== undefined && shown.hostId === ws.hostId && shown.remotePath === ws.remotePath
       },
       revealInFiles: (_sessionId, remotePath) => {
-        // 接管了 DSH「文件」侧栏时打开接管的那个标签，避免同时出现两个文件树。
-        const kind = filesTakeover.status().state === 'active' ? FILES_KIND : FILES_ID
+        const kind = filesKind()
         const right = ctx.get('sidebarRight') as SidebarRight | undefined
         // 定位是否已处理按宿主导航的 revision 判断（见 RemoteFilesTab）；nonce 供没有 revision 的旧宿主兜底。
         right?.openTab?.(kind, { params: { reveal: remotePath, nonce: Date.now() }, revealIfOpened: true })
@@ -268,7 +278,8 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
         // pattern 必须比 'dsh-resource://file/**'（宿主 / better-sidebar 的通配）更长：同为 extension 档时按 pattern 长度胜出。
         patterns: ['dsh-resource://file/session/**', 'dsh-resource://file/absolute/**'],
         // 远程文件与本机文件都认领：本机会话里的聊天文件链接、present 卡片、@ 引用统一由本插件的查看器打开；
-        // 卸载 better-sidebar 后 absolute 地址也有人认领。解析不了的（远程会话里的非工作区 Windows 路径、会话根目录）交还宿主。
+        // 卸载 better-sidebar 后 absolute 地址也有人认领。解析不了的（远程会话里的非工作区 Windows 路径）交还宿主；
+        // 会话根目录本身（空相对路径）也认领 —— 查看器探测到目录后改开文件管理，交还宿主会读空路径报「path is required」。
         // 「文件查看器」开关关闭时一律不认领，文件交还宿主（或其他插件）的查看器；保持注册是为了开关切回时无需重注册。
         canOpen: (address) =>
           getSidebarPrefs().tabs.viewer && (index.resolveAddress(address) !== undefined || index.resolveLocalAddress(address) !== undefined),

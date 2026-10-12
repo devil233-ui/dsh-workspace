@@ -154,6 +154,23 @@ describe('createSidebarOpener', () => {
     expect(opener.openUrl('javascript:alert(1)')).toBe(false)
   })
 
+  it('文件夹指向工作区根：只打开文件管理不定位；跳出工作区（..、前缀相似目录）不在树里定位，改按地址打开交给查看器提示', () => {
+    const local = make('local')
+    for (const target of ['C:\\work\\proj', 'c:/work/proj/', 'C:\\work\\proj\\src\\..']) {
+      expect(local.opener.openResult({ kind: 'folder', target, title: 'proj', delivered: true }), target).toBe(true)
+      expect(local.calls.at(-1), target).toEqual(['tab', 'dsh-workspace:remote-files', { params: { nonce: 42 }, revealIfOpened: true }])
+    }
+    expect(local.opener.openResult({ kind: 'folder', target: 'C:\\work\\proj2', title: 'proj2', delivered: true })).toBe(true)
+    expect(local.calls.at(-1)).toEqual(['resource', 'dsh-resource://file/session/local/C:/work/proj2', { revealIfOpened: true }])
+    expect(local.opener.reveal('../other')).toBe(true)
+    expect(local.calls.at(-1)?.[0]).toBe('resource')
+    const remote = make('remote')
+    expect(remote.opener.openResult({ kind: 'folder', target: '/srv/app/', title: 'app', delivered: true, remoteHost: 'h1' })).toBe(true)
+    expect(remote.calls.at(-1)).toEqual(['tab', 'dsh-workspace:remote-files', { params: { nonce: 42 }, revealIfOpened: true }])
+    expect(remote.opener.openResult({ kind: 'folder', target: '/srv/app2', title: 'app2', delivered: true, remoteHost: 'h1' })).toBe(true)
+    expect(remote.calls.at(-1)).toEqual(['resource', 'dsh-resource://file/session/remote//srv/app2', { revealIfOpened: true }])
+  })
+
   it('没有当前会话 / 没有侧栏服务时返回 false', () => {
     expect(make(undefined).opener.reveal('x')).toBe(false)
     const bare = createSidebarOpener({ index, right: () => undefined, hasKind: () => true, currentSession: () => 'local', filesKind: () => 'files' })

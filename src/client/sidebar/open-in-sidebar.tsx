@@ -32,6 +32,7 @@ import {
   type RemoteIndex
 } from './remote-index.js'
 import { BROWSER_KIND, GIT_ID, SIDECHAT_KIND, SSH_ID, TASKS_KIND } from './kinds.js'
+import { folderAction } from './folder-redirect.js'
 
 // ------------------------------------------------------------------ 去重
 
@@ -202,6 +203,15 @@ export function revealPathOf(index: OpenerDeps['index'], sessionId: string, inpu
   return localPosixOf(input, index.sessionCwd(sessionId))
 }
 
+/**
+ * 「文件管理」标签的定位导航参数（open_in_sidebar 文件夹分支、查看器遇到文件夹时的重定向共用）。
+ * target 为 undefined = 目标就是工作区根，只打开不定位。
+ * 定位是否已处理按宿主导航 revision 判断（见 RemoteFilesTab）；nonce 供没有 revision 的旧宿主兜底。
+ */
+export function revealParams(target: string | undefined, expand: boolean, nonce: number): Record<string, unknown> {
+  return { ...(target !== undefined ? { reveal: target } : {}), ...(target !== undefined && expand ? { expand: true } : {}), nonce }
+}
+
 export function createSidebarOpener(deps: OpenerDeps): SidebarOpener {
   const now = deps.now ?? Date.now
   const openTabKind = (kind: string, params?: Record<string, unknown>): boolean => {
@@ -228,8 +238,15 @@ export function createSidebarOpener(deps: OpenerDeps): SidebarOpener {
     if (sessionId === undefined) return false
     const target = revealPathOf(deps.index, sessionId, input, where)
     if (target === undefined) return false
-    // 定位是否已处理按宿主导航 revision 判断（见 RemoteFilesTab）；nonce 供没有 revision 的旧宿主兜底。
-    return openTabKind(deps.filesKind(), { reveal: target, ...(expand ? { expand: true } : {}), nonce: now() })
+    // 文件树只显示工作区内：与查看器遇到文件夹时同一套判断（folderAction，规范化后带边界比较）。
+    // 工作区外（.. 跳出、前缀相似的兄弟目录等）不在树里定位，改按地址打开，由查看器给出「不在工作区内」提示与复制 / 系统打开。
+    const ws = deps.index.bySession(sessionId)
+    const cwd = deps.index.sessionCwd(sessionId)
+    const root = ws !== undefined ? ws.remotePath : cwd === undefined || cwd === '' ? undefined : toLocalPosix(cwd)
+    const action = folderAction(root, target, ws === undefined)
+    if (action.kind === 'outside') return openAddress(fileAddressOf(deps.index, sessionId, input, where))
+    // action.target 为 undefined = 目标就是工作区根：只打开「文件管理」，不定位。
+    return openTabKind(deps.filesKind(), revealParams(action.target, expand, now()))
   }
 
   return {

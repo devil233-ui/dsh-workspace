@@ -21,7 +21,8 @@ export function parseFileAddress(address: string): FileAddress | undefined {
     const [scope, ...rest] = address.slice(FILE_ADDRESS_PREFIX.length, end === -1 ? undefined : end).split('/')
     if (scope === 'session') {
       const [id, ...segments] = rest
-      if (id === undefined || id === '' || segments.length === 0) return undefined
+      if (id === undefined || id === '') return undefined
+      // 宿主 fileAddressFor 对「工作区根本身」生成空相对路径（.../session/<id>/，被改写时也可能丢掉结尾的 /），按工作区根处理。
       return { scope, sessionId: decodeURIComponent(id), path: segments.map(decodeURIComponent).join('/') }
     }
     if (scope === 'absolute') {
@@ -70,11 +71,20 @@ export function localSessionAddress(sessionId: string, cwd: string | undefined, 
   return sessionFileAddress(sessionId, normalized)
 }
 
-/** 本机路径 p 是否在 root 内（含 root；Windows 风格不区分大小写）。两者可以是原生或本地 POSIX 形式。 */
+/**
+ * 本机路径 p 是否在 root 内（含 root；Windows 风格不区分大小写）。两者可以是原生或本地 POSIX 形式。
+ * 先折叠 . 与 ..、合并重复斜杠再比较：C:/w/../other 字面上以 C:/w/ 开头，不规范化会被误判为在工作区内。
+ */
 export function isInsideLocal(root: string, p: string): boolean {
-  const r = localKey(nativeSlashPath(toLocalPosix(root)))
-  const k = localKey(nativeSlashPath(toLocalPosix(p)))
+  const r = localKey(nativeSlashPath(normalizeLocalPosix(root)))
+  const k = localKey(nativeSlashPath(normalizeLocalPosix(p)))
   return k === r || k.startsWith(`${r}/`)
+}
+
+/** 本机路径（原生或本地 POSIX 形式）→ 规范化的本地 POSIX 形式（统一斜杠、折叠 . 与 ..、去重复 / 结尾斜杠）；UNC 保留开头的 //。 */
+export function normalizeLocalPosix(p: string): string {
+  const s = toLocalPosix(p)
+  return s.startsWith('//') ? `/${normalizePosix(s.slice(1))}` : normalizePosix(s)
 }
 
 /**
@@ -86,13 +96,20 @@ export function localKey(p: string): string {
   return /^[A-Za-z]:\//.test(s) || /^[A-Za-z]:$/.test(s) || s.startsWith('//') ? s.toLowerCase() : s
 }
 
-/** POSIX 路径规范化（折叠 . 与 ..）。 */
+/**
+ * POSIX 路径规范化（折叠 . 与 ..，合并重复斜杠，去结尾斜杠）。
+ * 本地 POSIX 形式的盘符段（/C:/...）固定不弹出：C:/w/../../x 应停在 C:/x，弹掉盘符会变成 /x（别的路径）。
+ */
 export function normalizePosix(p: string): string {
   const out: string[] = []
-  for (const part of p.split('/')) {
+  const parts = p.split('/')
+  const drive = parts.find((part) => part !== '')
+  const pinned = drive !== undefined && /^[A-Za-z]:$/.test(drive) ? 1 : 0
+  for (const part of parts) {
     if (part === '' || part === '.') continue
-    if (part === '..') out.pop()
-    else out.push(part)
+    if (part === '..') {
+      if (out.length > pinned) out.pop()
+    } else out.push(part)
   }
   return `/${out.join('/')}`
 }
@@ -121,12 +138,16 @@ export function toRemotePath(ws: RemoteWorkspaceView, input: string): string | u
 
 /**
  * 「显示文件位置」的定位计划：从根到文件所在目录要展开的每一级；路径中有点开头的段时需要显示隐藏文件。
- * 不在根下返回 undefined（不是这个工作区的文件，不定位）。
+ * 不在根下（含规范化后经 .. 跳出、前缀相似的兄弟目录）或就是根本身返回 undefined（不是这个工作区里的条目，不定位）。
+ * target 是规范化后、沿用根写法的定位路径：文件树按根拼接子路径，本机 Windows 根（/C:/...）只差大小写时也要能对上。
  */
-export function revealPlan(root: string, target: string): { dirs: string[]; hidden: boolean } | undefined {
-  const base = root.length > 1 ? root.replace(/\/+$/, '') : root
-  if (target === base || !target.startsWith(base === '/' ? '/' : `${base}/`)) return undefined
-  const segments = target.slice(base === '/' ? 1 : base.length + 1).split('/').filter(Boolean)
+export function revealPlan(root: string, target: string): { dirs: string[]; hidden: boolean; target: string } | undefined {
+  const base = normalizePosix(root)
+  const norm = normalizePosix(target)
+  // 本地 POSIX 形式的 Windows 根（/C:/...）不区分大小写；远程与 macOS / Linux 本机路径区分大小写。
+  const fold = (s: string): string => (/^\/[A-Za-z]:(\/|$)/.test(base) ? s.toLowerCase() : s)
+  if (fold(norm) === fold(base) || !fold(norm).startsWith(base === '/' ? '/' : `${fold(base)}/`)) return undefined
+  const segments = norm.slice(base === '/' ? 1 : base.length + 1).split('/').filter(Boolean)
   if (segments.length === 0) return undefined
   const dirs: string[] = []
   let cur = base
@@ -134,7 +155,7 @@ export function revealPlan(root: string, target: string): { dirs: string[]; hidd
     cur = cur === '/' ? `/${seg}` : `${cur}/${seg}`
     dirs.push(cur)
   }
-  return { dirs, hidden: segments.some((s) => s.startsWith('.')) }
+  return { dirs, hidden: segments.some((s) => s.startsWith('.')), target: `${base === '/' ? '' : base}/${segments.join('/')}` }
 }
 
 /** 本地会话在线上的「主机 id」前缀（与宿主 local/local-fs.ts 的 LOCAL_ID_PREFIX 一致）。 */
@@ -245,25 +266,29 @@ export class RemoteIndex {
 
   /**
    * 本机文件地址 → 本机路径（本地 POSIX 形式）。远程工作区会话 / 远程占位目录里的地址返回 undefined（归 resolveAddress）。
-   * - session 范围：相对路径按该会话 cwd 拼接（cwd 未知时无法解析）；绝对路径原样。会话根目录本身（空路径）是目录，不认领。
+   * - session 范围：相对路径按该会话 cwd 拼接（cwd 未知时无法解析）；绝对路径原样。
+   *   空路径 / '.' / './' 就是会话工作区根本身（宿主 fileAddressFor 对根生成空相对路径）：照样认领，查看器探测到目录后改开「文件管理」；
+   *   不认领就会落到宿主自带的查看器，它拿空路径去读，报「path is required」。
    * - absolute 范围：任意本机绝对路径（卸载 better-sidebar 后这类地址也要有人认领）。
+   * 返回的路径一律规范化（统一斜杠、折叠 . 与 ..、去重复 / 结尾斜杠）；是否仍在工作区内由调用方用 isInsideLocal 判断。
    * 返回的 sessionId / cwd 供查看器判断「是否在该会话工作区内、能否保存」。
    */
   resolveLocalAddress(address: string): { path: string; sessionId?: string; cwd?: string } | undefined {
     const parsed = parseFileAddress(address)
     if (parsed === undefined) return undefined
     if (parsed.scope === 'session') {
-      if (parsed.path === '' || this.bySession(parsed.sessionId) !== undefined) return undefined
+      if (this.bySession(parsed.sessionId) !== undefined) return undefined
       const cwd = this.sessionCwd(parsed.sessionId)
       const p = parsed.path.replace(/\\/g, '/')
-      const absolute = p.startsWith('/') || /^[A-Za-z]:\//.test(p)
+      if (p.startsWith('//')) return undefined
+      const absolute = p.startsWith('/') || /^[A-Za-z]:(\/|$)/.test(p)
       if (!absolute && (cwd === undefined || cwd === '')) return undefined
       const joined = absolute ? p : `${(cwd as string).replace(/\\/g, '/').replace(/\/+$/, '')}/${p}`
-      return { path: normalizePosix(toLocalPosix(joined)), sessionId: parsed.sessionId, ...(cwd !== undefined && cwd !== '' ? { cwd } : {}) }
+      return { path: normalizeLocalPosix(joined), sessionId: parsed.sessionId, ...(cwd !== undefined && cwd !== '' ? { cwd } : {}) }
     }
     if (this.byLocalPath(parsed.path) !== undefined) return undefined
     if (parsed.path.startsWith('//')) return undefined
-    return { path: normalizePosix(toLocalPosix(parsed.path)) }
+    return { path: normalizeLocalPosix(parsed.path) }
   }
 
   /** 文件地址 → {工作区, 远程路径}；不属于远程工作区返回 undefined。 */
