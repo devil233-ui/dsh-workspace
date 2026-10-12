@@ -4,6 +4,8 @@
 
 ## 未发布
 
+## 0.12.3（2026-10-12）
+
 ### SSH 连接
 
 - 修复：远程工作区连接建立后，服务器侧断开连接（ECONNRESET）或保活超时会让整个 DSH 崩溃（宿主进程 exit 1，issue #6）。根因是 `rawDial` 握手成功后摘掉了 ssh2 Client 的 `error` 监听，已建立连接上的 `error` 无人接收成为未捕获异常。现在保留一个常驻监听只记 warn 日志（握手期错误仍由原逻辑记录并 reject，不重复记），断线回收与自动重连沿用连接池的 close / end 处理；跳板链每一跳同样受益。补回归测试 `src/ssh/connection.test.ts`。
