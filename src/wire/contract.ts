@@ -63,6 +63,7 @@ export const METHODS = [
   'updateCheck',
   'updateInstall',
   'setFilesTakeover',
+  'setLocalShell',
   'presentedFile',
   'localRead',
   'localReadData',

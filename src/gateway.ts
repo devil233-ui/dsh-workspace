@@ -681,6 +681,18 @@ export class WorkspaceGateway extends RemoteService {
     })
   }
 
+  /**
+   * 远程工作区会话是否保留本机 shell。默认关闭（安全）；打开后 pwsh / powershell / cmd
+   * 在远程会话里照常可用，但命令会在**本机**执行。切换需重挂载（刷新页面 / 重开会话）才生效。
+   */
+  setLocalShell(input: In<'setLocalShell'>): Out<'setLocalShell'> {
+    return this.guard(() => {
+      const prefs = this.rt.prefs.setLocalShell(input.enabled)
+      this.rt.log.warn('', 'config', `已${input.enabled ? '允许' : '禁止'}在远程工作区会话里调用本机 shell（pwsh / powershell / cmd）${input.enabled ? ' —— 这些命令将在本机执行' : ''}，刷新页面或重开会话后生效。`)
+      return this.prefsOutput(prefs)
+    })
+  }
+
   setSidebarPrefs(input: In<'setSidebarPrefs'>): Out<'setSidebarPrefs'> {
     return this.guard(() => this.prefsOutput(this.rt.prefs.setSidebar(input)))
   }
@@ -712,6 +724,7 @@ export class WorkspaceGateway extends RemoteService {
       defaultIgnore: [...DEFAULT_IGNORE],
       takeoverAddWorkspace: prefs.takeoverAddWorkspace,
       takeoverFilesSidebar: prefs.takeoverFilesSidebar,
+      allowLocalShell: prefs.allowLocalShell,
       sidebar: prefs.sidebar
     }
   }
