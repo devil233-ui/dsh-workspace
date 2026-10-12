@@ -8,7 +8,7 @@
  * 不检出 —— 远程目录当前的分支、暂存区和文件都不变（与 uGit 的「切换查看」一致）。
  * 会改变仓库的操作只有改动页的暂存 / 丢弃 / 提交，都由用户点击触发；丢弃需二次确认。
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { Split } from './Split.js'
 import { rowButtonProps } from './row-activate.js'
 import { NOTE_HEIGHT, ROW_HEIGHT, SECTION_HEIGHT, VirtualList } from './VirtualList.js'
@@ -31,7 +31,9 @@ import { useLocalSupport } from './host-support.js'
 import { AiChangesView } from './AiChangesView.js'
 import { refreshAiChanges, repoRelative, turnCount, useAiChanges, type AiScope } from './ai-changes.js'
 import { redactSecrets, type RedactResult } from './redact.js'
-import { CommitPopover, POPOVER_TRIGGER_ATTR, useHoverIntent } from './CommitPopover.js'
+import { CommitPopover, CommitPopoverSideContext, useHoverIntent } from './CommitPopover.js'
+import { useLongPress } from './long-press.js'
+import { MOBILE_QUERY, useMediaQuery } from '../narrow.js'
 import { useTabStrip } from '../tabstrip.js'
 import type { AiChangeBase, AiChangedFile } from '../../wire/ai-changes.js'
 
@@ -1628,6 +1630,24 @@ function HistoryView(props: HistoryProps) {
   useEffect(() => {
     if (popHash !== null && popCommit === undefined) intent.close()
   }, [popHash, popCommit, intent])
+  // 悬停浮窗的首选方向由所在容器决定（右侧栏 = 左侧，会话顶部标签页 = 右侧），见 CommitPopoverSideContext。
+  const popSide = useContext(CommitPopoverSideContext)
+  // 移动端（窄屏 / 无悬停）：长按提交行或点「说明」，以屏幕居中的模态弹窗显示。
+  const mobile = useMediaQuery(MOBILE_QUERY)
+  // 哪个提交以模态弹窗打开；为什么单独记而不看 intent.pinned()：同一提交可能先被悬停打开，
+  // 再长按时 key 不变、hover 状态机不会触发重渲染，需要这个 state 驱动切换成弹窗。
+  const [modalHash, setModalHash] = useState<string | null>(null)
+  useEffect(() => {
+    if (popHash === null) setModalHash(null)
+  }, [popHash])
+  const openModal = useCallback(
+    (hash: string): void => {
+      setModalHash(hash)
+      intent.open(hash)
+    },
+    [intent]
+  )
+  const longPress = useLongPress<string>(openModal, mobile)
 
   const loadMore = useCallback(
     async (reset: boolean) => {
@@ -1675,8 +1695,8 @@ function HistoryView(props: HistoryProps) {
       {commits.length === 0 && !loading && error === null ? <div className="dshws-side-note">{t('git.noCommits')}</div> : null}
       {commits.map((c, i) => (
         <div key={c.hash}>
-          {/* 不再用 title：原生提示会和说明浮窗叠在一起。悬停只认鼠标 / 笔（触屏点按会合成 hover，交给「说明」按钮）；
-              聚焦只认 :focus-visible（键盘），避免鼠标点击展开时也触发。 */}
+          {/* 不再用 title：原生提示会和说明浮窗叠在一起。悬停只认鼠标 / 笔（触屏点按会合成 hover，交给长按 / 「说明」按钮）；
+              聚焦只认 :focus-visible（键盘），避免鼠标点击展开时也触发。移动端长按打开居中弹窗，短按仍是展开 / 收起详情。 */}
           <button
             type="button"
             className="dshws-git-commit-row"
@@ -1686,6 +1706,7 @@ function HistoryView(props: HistoryProps) {
               if (el !== null) rowEls.current.set(c.hash, el)
               else rowEls.current.delete(c.hash)
             }}
+            {...longPress(c.hash)}
             onClick={() => void toggle(c)}
             onPointerEnter={(e) => {
               if (e.pointerType !== 'touch') intent.enter(c.hash)
@@ -1725,14 +1746,14 @@ function HistoryView(props: HistoryProps) {
                 <span>{c.author}</span>
                 <span>{new Date(c.date).toLocaleString()}</span>
                 {c.parents.length > 1 ? <span className="dshws-pill">{t('git.mergeVsFirst')}</span> : null}
-                {/* 触屏 / 窄屏没有悬停：用这个按钮点开同一个浮窗（样式里只在 hover: none 或 ≤640px 时显示）。
-                    选按钮而不选长按：长按在手机上会和系统的文字选择 / 菜单抢手势，按钮可发现性也更好。 */}
+                {/* 移动端（样式里只在 hover: none 或 ≤640px 时显示）：长按提交行之外的备用入口，打开同一个居中弹窗。
+                    为什么保留：长按没有任何视觉提示，不知道这个手势的用户靠它也能看到完整说明。 */}
                 <button
                   type="button"
                   className="dshws-link-btn dshws-git-msg-btn"
-                  {...{ [POPOVER_TRIGGER_ATTR]: '' }}
-                  aria-expanded={popHash === c.hash}
-                  onClick={() => (popHash === c.hash && intent.pinned() ? intent.close() : intent.open(c.hash))}
+                  title={t('git.msg.longPressHint')}
+                  aria-haspopup="dialog"
+                  onClick={() => openModal(c.hash)}
                 >
                   {t('git.msg.show')}
                 </button>
@@ -1769,8 +1790,18 @@ function HistoryView(props: HistoryProps) {
           {loading ? t('files.loading') : t('git.loadMore')}
         </button>
       ) : null}
-      {popCommit !== undefined && popAnchor !== undefined ? (
-        <CommitPopover key={popCommit.hash} t={t} commit={popCommit} anchor={popAnchor} intent={intent} raw={rawMessage} onRaw={setRawMessage} />
+      {popCommit !== undefined && (modalHash === popCommit.hash || popAnchor !== undefined) ? (
+        <CommitPopover
+          key={popCommit.hash}
+          t={t}
+          commit={popCommit}
+          anchor={popAnchor}
+          intent={intent}
+          raw={rawMessage}
+          onRaw={setRawMessage}
+          side={popSide}
+          modal={modalHash === popCommit.hash}
+        />
       ) : null}
     </div>
   )

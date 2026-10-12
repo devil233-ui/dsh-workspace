@@ -562,9 +562,27 @@ export const CSS = `
   font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-secondary); word-break: break-word; overflow-wrap: anywhere;
 }
 .dshws-git-pop-body[data-raw="true"] { font-family: var(--dsw-font-family-mono, ui-monospace, Consolas, monospace); font-size: 11.5px; white-space: pre-wrap; }
-/* 「说明」按钮只给没有悬停的设备 / 窄屏用（断点与 narrow.ts 的 NARROW_MAX_WIDTH 一致） */
+/* 「说明」按钮只给没有悬停的设备 / 窄屏用（断点与 narrow.ts 的 NARROW_MAX_WIDTH / MOBILE_QUERY 一致） */
 .dshws-git-msg-btn { display: none; margin-left: auto; }
-@media (hover: none), (max-width: 640px) { .dshws-git-msg-btn { display: inline-flex; } }
+@media (hover: none), (max-width: 640px) {
+  .dshws-git-msg-btn { display: inline-flex; }
+  /* 长按提交行打开说明弹窗：关掉 iOS 的长按预览 / 菜单；按住期间（data-pressing，见 long-press.ts）不选中文字 */
+  .dshws-git-commit-row { -webkit-touch-callout: none; }
+  .dshws-git-commit-row[data-pressing="true"] { -webkit-user-select: none; user-select: none; }
+}
+/*
+ * 移动端居中模态弹窗（长按提交行 / 「说明」按钮）：遮罩 z-index 与图片放大层同级（10000），
+ * 盖住宿主侧栏抽屉与本插件所有浮层；卡片沿用 .dshws-git-pop 的主题变量配色，深浅色都可读。
+ */
+.dshws-git-pop-mask {
+  position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center;
+  padding: 16px; box-sizing: border-box; background: rgba(0, 0, 0, .45); animation: dshws-float-in .12s ease-out;
+}
+.dshws-git-pop[data-modal="true"] {
+  position: relative; z-index: auto; width: min(92vw, 420px); max-width: none; min-width: 0; max-height: 70vh;
+  padding: 12px 14px; border-radius: 12px;
+}
+.dshws-git-pop-close { flex-shrink: 0; margin: -4px -6px 0 auto; }
 .dshws-git-md > :first-child { margin-top: 0; }
 .dshws-git-md > :last-child { margin-bottom: 0; }
 .dshws-git-md p, .dshws-git-md ul, .dshws-git-md ol, .dshws-git-md pre, .dshws-git-md blockquote, .dshws-git-md table { margin: 0 0 6px; }

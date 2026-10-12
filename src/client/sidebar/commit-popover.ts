@@ -26,27 +26,41 @@ export interface Placement {
   side: 'left' | 'bottom' | 'top' | 'right'
 }
 
+/** 浮窗首选方向：右侧栏里用 'left'（伸进主区），会话顶部标签页（主区）里用 'right'（伸进右侧详情区）。 */
+export type PopoverSide = 'left' | 'right'
+
 /**
  * 计算浮窗位置（position: fixed 的 left / top）。
- * 优先级：行的左侧（右侧栏贴屏幕右边，左边通常是大片主区）→ 下方 → 上方 → 右侧；都放不下时选上下空间大的一侧并收进视口。
- * 下方 / 上方时右边缘与行右边缘对齐：浮窗（≤420px）常比窄侧栏宽，向左伸进主区比顶出屏幕右边好。
+ * prefer = 'left'（默认，右侧栏）：左侧 → 下方 → 上方 → 右侧。右侧栏贴屏幕右边，左边通常是大片主区。
+ * prefer = 'right'（主区会话顶部标签）：右侧 → 左侧 → 下方 → 上方。列表在左、详情在右，右边空间大；
+ * 为什么右侧放不下先退左侧而不是下方：左右放置不会盖住相邻的提交行，比上下更不挡视线。
+ * 都放不下时选上下空间大的一侧并收进视口。
+ * 下方 / 上方时贴首选方向的那条边：左侧优先时右边缘与行右边缘对齐（浮窗常比窄侧栏宽，向左伸进主区比顶出屏幕右边好），
+ * 右侧优先时左边缘与行左边缘对齐（主区列表靠左，向右伸展）。
  */
-export function placeCommitPopover(anchor: Rect, size: Size, viewport: Size, opt: { gap?: number; margin?: number } = {}): Placement {
+export function placeCommitPopover(anchor: Rect, size: Size, viewport: Size, opt: { gap?: number; margin?: number; prefer?: PopoverSide } = {}): Placement {
   const gap = opt.gap ?? 6
   const margin = opt.margin ?? 8
+  const prefer = opt.prefer ?? 'left'
   const { width: w, height: h } = size
   // 先 min 再 max：浮窗比视口还大时贴住 margin，而不是给出负坐标。
   const clampX = (x: number): number => Math.max(margin, Math.min(x, viewport.width - margin - w))
   const clampY = (y: number): number => Math.max(margin, Math.min(y, viewport.height - margin - h))
+  const vx = clampX(prefer === 'left' ? anchor.right - w : anchor.left)
 
-  if (anchor.left - gap - w >= margin) return { left: anchor.left - gap - w, top: clampY(anchor.top), side: 'left' }
-  if (anchor.bottom + gap + h <= viewport.height - margin) return { left: clampX(anchor.right - w), top: anchor.bottom + gap, side: 'bottom' }
-  if (anchor.top - gap - h >= margin) return { left: clampX(anchor.right - w), top: anchor.top - gap - h, side: 'top' }
-  if (anchor.right + gap + w <= viewport.width - margin) return { left: anchor.right + gap, top: clampY(anchor.top), side: 'right' }
+  const left = (): Placement | null => (anchor.left - gap - w >= margin ? { left: anchor.left - gap - w, top: clampY(anchor.top), side: 'left' } : null)
+  const right = (): Placement | null => (anchor.right + gap + w <= viewport.width - margin ? { left: anchor.right + gap, top: clampY(anchor.top), side: 'right' } : null)
+  const bottom = (): Placement | null => (anchor.bottom + gap + h <= viewport.height - margin ? { left: vx, top: anchor.bottom + gap, side: 'bottom' } : null)
+  const top = (): Placement | null => (anchor.top - gap - h >= margin ? { left: vx, top: anchor.top - gap - h, side: 'top' } : null)
+  const order = prefer === 'left' ? [left, bottom, top, right] : [right, left, bottom, top]
+  for (const tryPlace of order) {
+    const p = tryPlace()
+    if (p !== null) return p
+  }
   const below = viewport.height - anchor.bottom
   return below >= anchor.top
-    ? { left: clampX(anchor.right - w), top: clampY(anchor.bottom + gap), side: 'bottom' }
-    : { left: clampX(anchor.right - w), top: clampY(anchor.top - gap - h), side: 'top' }
+    ? { left: vx, top: clampY(anchor.bottom + gap), side: 'bottom' }
+    : { left: vx, top: clampY(anchor.top - gap - h), side: 'top' }
 }
 
 export interface HoverTimers {
@@ -61,7 +75,7 @@ export interface HoverIntent<K> {
   leave(): void
   enterPopover(): void
   leavePopover(): void
-  /** 点击打开（触屏「说明」按钮）：立即显示并固定，悬停进出不再影响，直到 close。 */
+  /** 主动打开（移动端长按 / 「说明」按钮，以居中弹窗显示）：立即显示并固定，悬停进出不再影响，直到 close。 */
   open(key: K): void
   /** 立即关闭（Esc / 滚动 / 点外面）。 */
   close(): void

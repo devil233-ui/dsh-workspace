@@ -48,6 +48,42 @@ describe('placeCommitPopover', () => {
     expect(huge.left).toBe(8)
     expect(huge.top).toBe(8)
   })
+
+  it('显式 prefer=left 与默认一致', () => {
+    expect(placeCommitPopover(row(100), POP, VP, { prefer: 'left' })).toEqual(placeCommitPopover(row(100), POP, VP))
+  })
+})
+
+describe('placeCommitPopover · prefer right（主区会话顶部标签）', () => {
+  /** 主区左侧的历史列表：x 0..360，右边是详情区。 */
+  const mainRow = (top: number, left = 0, right = 360) => ({ left, right, top, bottom: top + 28 })
+
+  it('右侧放得下时放在行右侧，顶边与行对齐', () => {
+    expect(placeCommitPopover(mainRow(100), POP, VP, { prefer: 'right' })).toEqual({ left: 366, top: 100, side: 'right' })
+  })
+
+  it('右侧时纵向收进视口', () => {
+    const p = placeCommitPopover(mainRow(700), POP, VP, { prefer: 'right' })
+    expect(p.side).toBe('right')
+    expect(p.top).toBe(800 - 8 - 300)
+  })
+
+  it('右侧放不下时退回左侧', () => {
+    expect(placeCommitPopover(mainRow(100, 500, 1000), POP, VP, { prefer: 'right' })).toEqual({ left: 500 - 6 - 420, top: 100, side: 'left' })
+  })
+
+  it('左右都放不下时放下方，左边缘与行左边缘对齐', () => {
+    expect(placeCommitPopover(mainRow(100, 200, 1000), POP, VP, { prefer: 'right' })).toEqual({ left: 200, top: 134, side: 'bottom' })
+  })
+
+  it('下方也放不下时翻到上方', () => {
+    expect(placeCommitPopover(mainRow(600, 300, 1270), POP, VP, { prefer: 'right' })).toEqual({ left: 300, top: 600 - 6 - 300, side: 'top' })
+  })
+
+  it('下方 / 上方时横向收进视口（行靠右、窗口窄）', () => {
+    const p = placeCommitPopover(mainRow(100, 400, 630), POP, { width: 640, height: 800 }, { prefer: 'right' })
+    expect(p).toEqual({ left: 640 - 8 - 420, top: 134, side: 'bottom' })
+  })
 })
 
 describe('createHoverIntent', () => {

@@ -21,6 +21,7 @@ import { RemoteFileTab, type SidebarTabInfo } from './RemoteFileTab.js'
 import { RemoteFilesTab } from './RemoteFilesTab.js'
 import { SshTab } from './SshTab.js'
 import { GitTab } from './GitTab.js'
+import { CommitPopoverSideContext } from './CommitPopover.js'
 import { installPresentActions } from './present-actions.js'
 import { revealPlan } from './remote-index.js'
 import { FILES_KIND, TAKEOVER_FILES_ID, filesTakeover, manageFilesTakeover, onFilesTakeoverToggle, type FilesRegistry } from './files-takeover.js'
@@ -527,7 +528,9 @@ function mountConversationTabs(ctx: ClientContext, current: CurrentSession, deps
   const make = (Body: typeof RemoteFilesTab) => (props: { sessionId: string }) =>
     createElement(FitView, null, createElement(Body, { ...deps, sessionId: props.sessionId }))
   const FilesView = make(RemoteFilesTab)
-  const GitView = make(GitTab)
+  const GitBody = make(GitTab)
+  // 会话顶部标签在主区：列表靠左、右边是详情区，提交说明浮窗改放行的右侧（右侧栏里默认放左侧伸进主区）。
+  const GitView = (props: { sessionId: string }) => createElement(CommitPopoverSideContext.Provider, { value: 'right' }, createElement(GitBody, props))
 
   // 两个标签各自受「侧边栏」管理页的「文件管理」「Git」开关控制（与右侧栏同一开关）。
   const views = [
