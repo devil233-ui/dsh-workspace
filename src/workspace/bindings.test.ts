@@ -4,7 +4,7 @@
  * @FilePath: /dsh-workspace/src/workspace/bindings.test.ts
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
@@ -44,6 +44,38 @@ describe('BindingStore', () => {
   it('同一主机同一远程目录再次创建：幂等返回同一记录', () => {
     const store = new BindingStore()
     expect(store.create(input).localPath).toBe(store.create(input).localPath)
+    expect(store.list()).toHaveLength(1)
+  })
+
+  it('旧布局登记再次创建：迁移到新布局路径，旧登记删除且旧目录不动', () => {
+    const store = new BindingStore()
+    // 手工构造一条旧布局登记（旧版占位目录 = <endpoint>/<标题>）。
+    const legacyDir = path.join(remoteWorkspacesRoot(), input.endpoint, folderName(input.title))
+    mkdirSync(legacyDir, { recursive: true })
+    writeFileSync(path.join(legacyDir, WORKSPACE_META_FILE), JSON.stringify({ kind: 'dsh-workspace/remote', version: 1, hostId: input.hostId, remotePath: input.remotePath, title: input.title, createdAt: '2026-01-01T00:00:00.000Z' }, null, 2), 'utf8')
+    store.resolve(legacyDir) // 触发 meta 自愈，把旧布局登记补进映射表
+    expect(store.list()).toHaveLength(1)
+
+    const b = store.create(input)
+    expect(b.localPath).toBe(path.join(remoteWorkspacesRoot(), input.endpoint, ...remotePathSegments(input.remotePath)))
+    expect(b.localPath).not.toBe(legacyDir)
+    expect(existsSync(path.join(b.localPath, WORKSPACE_META_FILE))).toBe(true)
+    // 登记表只剩新布局一条；旧目录与其 meta 原样保留（已有会话 cwd 仍指向它）。
+    expect(store.list()).toHaveLength(1)
+    expect(existsSync(legacyDir)).toBe(true)
+    expect(existsSync(path.join(legacyDir, WORKSPACE_META_FILE))).toBe(true)
+    // 旧目录的 meta 不再把已迁移的登记复活回旧路径（幽灵防线：旧目录彻底退役，
+    // 仍指向它的会话不再被认作远程工作区——迁会话是使用者的决定）。
+    expect(store.resolve(legacyDir)).toBeUndefined()
+    expect(store.list()).toHaveLength(1)
+  })
+
+  it('新布局登记再次创建不受迁移分支影响：直接幂等返回', () => {
+    const store = new BindingStore()
+    const first = store.create(input)
+    const again = store.create(input)
+    expect(again.localPath).toBe(first.localPath)
+    expect(again.createdAt).toBe(first.createdAt)
     expect(store.list()).toHaveLength(1)
   })
 

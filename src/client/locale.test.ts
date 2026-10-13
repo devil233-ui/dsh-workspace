@@ -8,10 +8,12 @@
  */
 import { describe, expect, it } from 'vitest'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { DICTIONARIES } from './locale.js'
 
-const clientDir = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'))
+// fileURLToPath 正确处理 Windows 盘符与路径里的非 ASCII 字符（pathname 会 percent-encode）。
+const clientDir = path.dirname(fileURLToPath(import.meta.url))
 
 function sourceFiles(dir: string): string[] {
   const out: string[] = []

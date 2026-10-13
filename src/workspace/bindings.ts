@@ -164,6 +164,11 @@ export class BindingStore {
       if (meta.kind !== 'dsh-workspace/remote' || typeof meta.hostId !== 'string' || typeof meta.remotePath !== 'string') {
         return undefined
       }
+      // 幽灵复活防线：这个目录已按旧布局退役（登记已迁到新布局路径）时，
+      // 不能再凭 meta 把旧路径复活回登记表，否则同一远程目录出现两条记录。
+      const map = this.load()
+      const retired = [...map.values()].some((b) => b.hostId === meta.hostId && b.remotePath === meta.remotePath)
+      if (retired) return undefined
       const binding: RemoteBinding = {
         localPath: dir,
         hostId: meta.hostId,
@@ -171,7 +176,7 @@ export class BindingStore {
         title: typeof meta.title === 'string' ? meta.title : path.basename(dir),
         createdAt: typeof meta.createdAt === 'string' ? meta.createdAt : new Date().toISOString()
       }
-      this.load().set(pathKey(dir), binding)
+      map.set(pathKey(dir), binding)
       this.persist()
       return binding
     } catch {
@@ -188,10 +193,24 @@ export class BindingStore {
    */
   create(input: { hostId: string; endpoint: string; remotePath: string; title: string }): RemoteBinding {
     const existing = this.list().find((b) => b.hostId === input.hostId && b.remotePath === input.remotePath)
-    if (existing !== undefined && existsSync(existing.localPath)) return existing
+    if (existing !== undefined && existsSync(existing.localPath)) {
+      // 旧版本把占位目录建在 <endpoint>/<标题>；命中旧布局时迁移登记到新布局路径
+      // （不动旧目录本身：已有会话的 cwd 还引用它，迁会话是使用者的决定）。
+      const wanted = path.join(remoteWorkspacesRoot(), safeSegment(input.endpoint), ...remotePathSegments(input.remotePath))
+      if (pathKey(existing.localPath) === pathKey(wanted)) return existing
+      const migrated = this.freshRegistration(input, this.availableDir(input, wanted))
+      this.load().delete(pathKey(existing.localPath))
+      this.persist()
+      return migrated
+    }
 
     const parent = path.join(remoteWorkspacesRoot(), safeSegment(input.endpoint))
-    let dir = path.join(parent, ...remotePathSegments(input.remotePath))
+    const dir = this.availableDir(input, path.join(parent, ...remotePathSegments(input.remotePath)))
+    return this.freshRegistration(input, dir)
+  }
+
+  /** 目录段撞车（不同远程目录消毒后落到同一段）时追加短哈希，返回一个不与别的远程目录冲突的落位。 */
+  private availableDir(input: { hostId: string; endpoint: string; remotePath: string }, dir: string): string {
     const occupied = (candidate: string): boolean => {
       const other = this.load().get(pathKey(candidate))
       if (other !== undefined) return other.hostId !== input.hostId || other.remotePath !== input.remotePath
@@ -203,8 +222,13 @@ export class BindingStore {
     }
     if (occupied(dir)) {
       const tag = createHash('sha256').update(`${input.hostId}\n${input.remotePath}`).digest('hex').slice(0, 6)
-      dir = `${dir}-${tag}`
+      return `${dir}-${tag}`
     }
+    return dir
+  }
+
+  /** 在给定目录落位：建目录、写 meta、登记并持久化（create 的共用尾段）。 */
+  private freshRegistration(input: { hostId: string; endpoint: string; remotePath: string; title: string }, dir: string): RemoteBinding {
     mkdirSync(dir, { recursive: true })
 
     const binding: RemoteBinding = {
