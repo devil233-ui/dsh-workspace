@@ -7,7 +7,15 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { BindingStore, folderName, relativeToRoot, toRemotePath } from './bindings.js'
+import {
+  BindingStore,
+  REMOTE_ROOT_SEGMENT,
+  folderName,
+  relativeToRoot,
+  remotePathSegments,
+  remoteWorkspacesRoot,
+  toRemotePath
+} from './bindings.js'
 import { WORKSPACE_META_FILE, bindingsFile } from '../paths.js'
 
 let sandbox: string
@@ -39,13 +47,39 @@ describe('BindingStore', () => {
     expect(store.list()).toHaveLength(1)
   })
 
-  it('同名但远程目录不同：目录名追加短哈希，不串台', () => {
+  it('占位目录按远程路径结构展开：子目录落在父工作区目录内（DSH 按工作区树据此嵌套）', () => {
     const store = new BindingStore()
-    const a = store.create(input)
-    const b = store.create({ ...input, remotePath: '/opt/中山渔业' })
+    const parent = store.create({ hostId: 'h1', endpoint: 'ep', remotePath: '/root', title: 'root' })
+    const child = store.create({ hostId: 'h1', endpoint: 'ep', remotePath: '/root/Yunzai', title: '云崽' })
+    expect(parent.localPath).toBe(path.join(remoteWorkspacesRoot(), 'ep', 'root'))
+    expect(child.localPath).toBe(path.join(parent.localPath, 'Yunzai'))
+    expect(store.resolve(child.localPath)?.remotePath).toBe('/root/Yunzai')
+  })
+
+  it('先建子目录再建父目录：父目录收编中间层，创建顺序不影响嵌套', () => {
+    const store = new BindingStore()
+    const child = store.create({ hostId: 'h1', endpoint: 'ep', remotePath: '/root/Yunzai', title: '云崽' })
+    const parent = store.create({ hostId: 'h1', endpoint: 'ep', remotePath: '/root', title: 'root' })
+    expect(parent.localPath).toBe(path.dirname(child.localPath))
+    expect(new BindingStore().resolve(parent.localPath)?.remotePath).toBe('/root')
+  })
+
+  it('远程根用固定段，不与常见的 /root 抢同一个目录', () => {
+    const store = new BindingStore()
+    const root = store.create({ hostId: 'h1', endpoint: 'ep', remotePath: '/', title: 'root' })
+    const home = store.create({ hostId: 'h1', endpoint: 'ep', remotePath: '/root', title: 'root' })
+    expect(path.basename(root.localPath)).toBe(REMOTE_ROOT_SEGMENT)
+    expect(home.localPath).toBe(path.join(remoteWorkspacesRoot(), 'ep', 'root'))
+    expect(root.localPath).not.toBe(home.localPath)
+  })
+
+  it('不同远程目录消毒后落到同一段：目录名追加短哈希，不串台', () => {
+    const store = new BindingStore()
+    const a = store.create({ ...input, remotePath: '/srv/a:b', title: 'a:b' })
+    const b = store.create({ ...input, remotePath: '/srv/a*b', title: 'a*b' })
     expect(a.localPath).not.toBe(b.localPath)
-    expect(store.resolve(a.localPath)?.remotePath).toBe('/home/ps/中山渔业')
-    expect(store.resolve(b.localPath)?.remotePath).toBe('/opt/中山渔业')
+    expect(store.resolve(a.localPath)?.remotePath).toBe('/srv/a:b')
+    expect(store.resolve(b.localPath)?.remotePath).toBe('/srv/a*b')
   })
 
   it('会话 cwd 写法不同（大小写 / 结尾斜杠 / 子目录）也能反查', () => {
@@ -81,6 +115,16 @@ describe('BindingStore', () => {
     expect(store.remove(b.localPath)).toBe(true)
     unlinkSync(path.join(b.localPath, WORKSPACE_META_FILE))
     expect(store.resolve(b.localPath)).toBeUndefined()
+  })
+})
+
+describe('remotePathSegments', () => {
+  it('逐段消毒、丢弃空段与 . / ..；远程根用固定段', () => {
+    expect(remotePathSegments('/home/ps/中山渔业')).toEqual(['home', 'ps', '中山渔业'])
+    expect(remotePathSegments('/srv/a:b*c')).toEqual(['srv', 'a_b_c'])
+    expect(remotePathSegments('/./a//b/../c/')).toEqual(['a', 'b', 'c'])
+    expect(remotePathSegments('/')).toEqual([REMOTE_ROOT_SEGMENT])
+    expect(remotePathSegments('')).toEqual([REMOTE_ROOT_SEGMENT])
   })
 })
 

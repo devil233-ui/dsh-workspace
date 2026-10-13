@@ -78,6 +78,26 @@ export function folderName(input: string): string {
   return cleaned.slice(0, 120)
 }
 
+/** 远程根目录（`/`）的占位段：不能退化成 `root`，否则与常见的 `/root` 抢同一个目录。 */
+export const REMOTE_ROOT_SEGMENT = '_root'
+
+/**
+ * 远程绝对路径 → 占位目录的各级段名。
+ *
+ * 占位目录按远程路径的真实结构逐级展开（/root/Yunzai → <endpoint>/root/Yunzai），
+ * 这样 DSH「按工作区树」分组时，子目录能像本地工作区一样挂在父工作区下面 ——
+ * 该分组的判据是「已登记工作区路径是它的祖先目录」，与目录名无关。
+ * 逐段消毒（保留中文），丢弃空段与 . / ..；远程根没有段，用固定段兜住。
+ */
+export function remotePathSegments(remotePath: string): string[] {
+  const segments = remotePath
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter((s) => s !== '' && s !== '.' && s !== '..')
+  if (segments.length === 0) return [REMOTE_ROOT_SEGMENT]
+  return segments.map((s) => folderName(s))
+}
+
 export class BindingStore {
   private data: Map<string, RemoteBinding> | undefined
 
@@ -161,19 +181,25 @@ export class BindingStore {
 
   /**
    * 创建远程工作区的占位目录并登记。
+   * 占位目录按远程路径的真实结构逐级展开（/root/Yunzai → <endpoint>/root/Yunzai），
+   * 于是 DSH「按工作区树」分组能把子目录挂在父工作区下面，与本地工作区一致。
    * 同一主机的同一远程目录再次创建时返回已有记录（幂等），与 DSH 同路径创建工作区的幂等一致。
-   * 目录名撞车（同名、但指向不同远程目录）时追加短哈希区分。
+   * 目录段撞车（不同远程目录消毒后落到同一段）时追加短哈希区分。
    */
   create(input: { hostId: string; endpoint: string; remotePath: string; title: string }): RemoteBinding {
     const existing = this.list().find((b) => b.hostId === input.hostId && b.remotePath === input.remotePath)
     if (existing !== undefined && existsSync(existing.localPath)) return existing
 
     const parent = path.join(remoteWorkspacesRoot(), safeSegment(input.endpoint))
-    let dir = path.join(parent, folderName(input.title))
+    let dir = path.join(parent, ...remotePathSegments(input.remotePath))
     const occupied = (candidate: string): boolean => {
       const other = this.load().get(pathKey(candidate))
-      return (other !== undefined && (other.hostId !== input.hostId || other.remotePath !== input.remotePath)) ||
-        (existsSync(candidate) && this.fromMetaNoPersist(candidate)?.remotePath !== input.remotePath)
+      if (other !== undefined) return other.hostId !== input.hostId || other.remotePath !== input.remotePath
+      if (!existsSync(candidate)) return false
+      const meta = this.fromMetaNoPersist(candidate)
+      // 没有 meta 的目录是别的远程工作区占位路径的中间层（例如先建了 /root/Yunzai，就有了 …/root）：
+      // 收编它，创建顺序才不会决定嵌套关系；带 meta 且指向别的远程目录的目录仍然让位（追加短哈希）。
+      return meta !== undefined && meta.remotePath !== input.remotePath
     }
     if (occupied(dir)) {
       const tag = createHash('sha256').update(`${input.hostId}\n${input.remotePath}`).digest('hex').slice(0, 6)
