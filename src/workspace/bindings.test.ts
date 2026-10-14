@@ -11,6 +11,7 @@ import {
   BindingStore,
   REMOTE_ROOT_SEGMENT,
   folderName,
+  isRemoteInside,
   relativeToRoot,
   remotePathSegments,
   remoteWorkspacesRoot,
@@ -47,7 +48,7 @@ describe('BindingStore', () => {
     expect(store.list()).toHaveLength(1)
   })
 
-  it('旧布局登记再次创建：迁移到新布局路径，旧登记删除且旧目录不动', () => {
+  it('旧布局登记再次创建：新增新布局登记，旧登记保留（同主机同远程目录多条并存）', () => {
     const store = new BindingStore()
     // 手工构造一条旧布局登记（旧版占位目录 = <endpoint>/<标题>）。
     const legacyDir = path.join(remoteWorkspacesRoot(), input.endpoint, folderName(input.title))
@@ -60,17 +61,17 @@ describe('BindingStore', () => {
     expect(b.localPath).toBe(path.join(remoteWorkspacesRoot(), input.endpoint, ...remotePathSegments(input.remotePath)))
     expect(b.localPath).not.toBe(legacyDir)
     expect(existsSync(path.join(b.localPath, WORKSPACE_META_FILE))).toBe(true)
-    // 登记表只剩新布局一条；旧目录与其 meta 原样保留（已有会话 cwd 仍指向它）。
-    expect(store.list()).toHaveLength(1)
+    // 新旧两条登记并存：不删旧登记也不动旧目录——已有会话的 cwd 还指向旧目录，
+    // 删了登记它们就静默失联（上游评审 #9 第 1 条，方案 A）。
+    expect(store.list()).toHaveLength(2)
     expect(existsSync(legacyDir)).toBe(true)
     expect(existsSync(path.join(legacyDir, WORKSPACE_META_FILE))).toBe(true)
-    // 旧目录的 meta 不再把已迁移的登记复活回旧路径（幽灵防线：旧目录彻底退役，
-    // 仍指向它的会话不再被认作远程工作区——迁会话是使用者的决定）。
-    expect(store.resolve(legacyDir)).toBeUndefined()
-    expect(store.list()).toHaveLength(1)
+    // 指向旧目录的旧会话仍被认作远程工作区（凭旧目录 meta 反查，不走幽灵防线）。
+    expect(store.resolve(legacyDir)?.remotePath).toBe('/home/ps/中山渔业')
+    expect(store.resolve(b.localPath)?.remotePath).toBe('/home/ps/中山渔业')
   })
 
-  it('新布局登记再次创建不受迁移分支影响：直接幂等返回', () => {
+  it('新布局登记再次创建：直接幂等返回，不重建目录', () => {
     const store = new BindingStore()
     const first = store.create(input)
     const again = store.create(input)
@@ -112,6 +113,52 @@ describe('BindingStore', () => {
     expect(a.localPath).not.toBe(b.localPath)
     expect(store.resolve(a.localPath)?.remotePath).toBe('/srv/a:b')
     expect(store.resolve(b.localPath)?.remotePath).toBe('/srv/a*b')
+  })
+
+  it('撞车让位目录重复创建：幂等返回原登记，不删自己的登记（上游评审 #9 第 2 条）', () => {
+    const store = new BindingStore()
+    store.create({ ...input, remotePath: '/srv/a:b', title: 'a:b' })
+    const first = store.create({ ...input, remotePath: '/srv/a*b', title: 'a*b' })
+    expect(path.basename(first.localPath)).toMatch(/a_b-[0-9a-f]{6}$/)
+    const second = store.create({ ...input, remotePath: '/srv/a*b', title: 'a*b' })
+    expect(second.localPath).toBe(first.localPath)
+    expect(second.createdAt).toBe(first.createdAt)
+    expect(store.list()).toHaveLength(2)
+    expect(store.resolve(first.localPath)?.remotePath).toBe('/srv/a*b')
+  })
+
+  it('让位父目录的子工作区挂回让位目录内，不挂进占错节点的兄弟（上游评审 #9 第 4 条）', () => {
+    const store = new BindingStore()
+    store.create({ ...input, remotePath: '/srv/a:b', title: 'a:b' })
+    const parent = store.create({ ...input, remotePath: '/srv/a*b', title: 'a*b' })
+    expect(path.basename(parent.localPath)).toMatch(/a_b-[0-9a-f]{6}$/)
+    const child = store.create({ ...input, remotePath: '/srv/a*b/c', title: 'c' })
+    expect(child.localPath).toBe(path.join(parent.localPath, 'c'))
+    expect(store.resolve(child.localPath)?.remotePath).toBe('/srv/a*b/c')
+  })
+
+  it('不同大小写的远程目录在大小写不敏感文件系统上互相让位、各自解析正确', () => {
+    const store = new BindingStore()
+    const lower = store.create({ hostId: 'h1', endpoint: 'ep', remotePath: '/root/app', title: 'app' })
+    const upper = store.create({ hostId: 'h1', endpoint: 'ep', remotePath: '/root/App', title: 'App' })
+    expect(upper.localPath).not.toBe(lower.localPath)
+    expect(store.resolve(lower.localPath)?.remotePath).toBe('/root/app')
+    expect(store.resolve(upper.localPath)?.remotePath).toBe('/root/App')
+  })
+
+  it('映射表丢失后，新旧两条登记各自凭占位目录里的 meta 自愈（上游评审 #9 第 3 条）', () => {
+    const store = new BindingStore()
+    const legacyDir = path.join(remoteWorkspacesRoot(), input.endpoint, folderName(input.title))
+    mkdirSync(legacyDir, { recursive: true })
+    writeFileSync(path.join(legacyDir, WORKSPACE_META_FILE), JSON.stringify({ kind: 'dsh-workspace/remote', version: 1, hostId: input.hostId, remotePath: input.remotePath, title: input.title, createdAt: '2026-01-01T00:00:00.000Z' }, null, 2), 'utf8')
+    store.resolve(legacyDir) // 触发 meta 自愈
+    const b = store.create(input)
+    expect(store.list()).toHaveLength(2)
+    unlinkSync(bindingsFile())
+    const recovered = new BindingStore()
+    expect(recovered.resolve(legacyDir)?.remotePath).toBe('/home/ps/中山渔业')
+    expect(recovered.resolve(b.localPath)?.remotePath).toBe('/home/ps/中山渔业')
+    expect(recovered.list()).toHaveLength(2)
   })
 
   it('会话 cwd 写法不同（大小写 / 结尾斜杠 / 子目录）也能反查', () => {
@@ -157,6 +204,25 @@ describe('remotePathSegments', () => {
     expect(remotePathSegments('/./a//b/../c/')).toEqual(['a', 'b', 'c'])
     expect(remotePathSegments('/')).toEqual([REMOTE_ROOT_SEGMENT])
     expect(remotePathSegments('')).toEqual([REMOTE_ROOT_SEGMENT])
+    expect(remotePathSegments('/a/b/c')).toEqual(['a', 'b', 'c']) // 8 层以内不折叠
+  })
+
+  it('超过 8 层的远程路径：保留前 7 段，剩余折叠为 8 位十六进制短哈希段（确定性）', () => {
+    const deep = remotePathSegments('/a/b/c/d/e/f/g/h/i')
+    expect(deep).toEqual([...remotePathSegments('/a/b/c/d/e/f/g'), expect.stringMatching(/^[0-9a-f]{8}$/)])
+    expect(deep).toEqual(remotePathSegments('/a/b/c/d/e/f/g/h/i/')) // 尾斜杠不改变折叠结果
+    expect(remotePathSegments('/a/b/c/d/e/f/g/h/x')[7]).not.toBe(deep[7])
+  })
+})
+
+describe('isRemoteInside', () => {
+  it('相等或真子路径为真；仅同前缀不是；远程根包含一切', () => {
+    expect(isRemoteInside('/root', '/root')).toBe(true)
+    expect(isRemoteInside('/root/Yunzai', '/root')).toBe(true)
+    expect(isRemoteInside('/rootx', '/root')).toBe(false)
+    expect(isRemoteInside('/root', '/root/Yunzai')).toBe(false)
+    expect(isRemoteInside('/anything', '/')).toBe(true)
+    expect(isRemoteInside('/srv/a*b/c', '/srv/a*b')).toBe(true)
   })
 })
 

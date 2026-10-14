@@ -8,9 +8,11 @@
  * Agent 运行时拿到的是会话 cwd，用它反查本表即知道该会话对应哪台主机、哪个远程目录。
  *
  * 主键用规范化后的占位目录路径，而不是 workspaceId：工作区删掉重加后 id 会变，路径不变。
- * 占位目录内另写一份 meta 文件作为双保险 —— 映射表丢失时可据此重建。
+ * 占位目录内另写一份 meta 文件作为双保险 —— 映射表丢失时可据此重建；
+ * 同一远程目录允许并存多条登记（新旧布局目录共存），各自凭 meta 重建、互不挤占。
  */
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs'
+import type { Dirent } from 'node:fs'
 import { renameWithRetry } from '../fs-atomic.js'
 import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
@@ -81,6 +83,9 @@ export function folderName(input: string): string {
 /** 远程根目录（`/`）的占位段：不能退化成 `root`，否则与常见的 `/root` 抢同一个目录。 */
 export const REMOTE_ROOT_SEGMENT = '_root'
 
+/** 占位目录的最大层级：更深的远程路径把剩余部分折叠成一个短哈希段，防止占位目录超出 Windows 的路径长度上限。 */
+export const MAX_REMOTE_PATH_SEGMENTS = 8
+
 /**
  * 远程绝对路径 → 占位目录的各级段名。
  *
@@ -88,6 +93,7 @@ export const REMOTE_ROOT_SEGMENT = '_root'
  * 这样 DSH「按工作区树」分组时，子目录能像本地工作区一样挂在父工作区下面 ——
  * 该分组的判据是「已登记工作区路径是它的祖先目录」，与目录名无关。
  * 逐段消毒（保留中文），丢弃空段与 . / ..；远程根没有段，用固定段兜住。
+ * 超过 MAX_REMOTE_PATH_SEGMENTS 层时保留前面各段，剩余部分折叠成一个短哈希段（确定性，重复创建落位一致）。
  */
 export function remotePathSegments(remotePath: string): string[] {
   const segments = remotePath
@@ -95,7 +101,17 @@ export function remotePathSegments(remotePath: string): string[] {
     .split('/')
     .filter((s) => s !== '' && s !== '.' && s !== '..')
   if (segments.length === 0) return [REMOTE_ROOT_SEGMENT]
-  return segments.map((s) => folderName(s))
+  const names = segments.map((s) => folderName(s))
+  if (names.length <= MAX_REMOTE_PATH_SEGMENTS) return names
+  const fold = createHash('sha256').update(segments.join('/')).digest('hex').slice(0, 8)
+  return [...names.slice(0, MAX_REMOTE_PATH_SEGMENTS - 1), fold]
+}
+
+/** 远程路径包含关系：child 等于 parent 或位于 parent 之下（按 POSIX 逐段比较，用于判断占位目录的合法父子）。 */
+export function isRemoteInside(child: string, parent: string): boolean {
+  if (child === parent) return true
+  const base = parent === '/' ? '' : parent.replace(/\/+$/, '')
+  return child.startsWith(`${base}/`)
 }
 
 export class BindingStore {
@@ -164,11 +180,7 @@ export class BindingStore {
       if (meta.kind !== 'dsh-workspace/remote' || typeof meta.hostId !== 'string' || typeof meta.remotePath !== 'string') {
         return undefined
       }
-      // 幽灵复活防线：这个目录已按旧布局退役（登记已迁到新布局路径）时，
-      // 不能再凭 meta 把旧路径复活回登记表，否则同一远程目录出现两条记录。
       const map = this.load()
-      const retired = [...map.values()].some((b) => b.hostId === meta.hostId && b.remotePath === meta.remotePath)
-      if (retired) return undefined
       const binding: RemoteBinding = {
         localPath: dir,
         hostId: meta.hostId,
@@ -188,43 +200,98 @@ export class BindingStore {
    * 创建远程工作区的占位目录并登记。
    * 占位目录按远程路径的真实结构逐级展开（/root/Yunzai → <endpoint>/root/Yunzai），
    * 于是 DSH「按工作区树」分组能把子目录挂在父工作区下面，与本地工作区一致。
-   * 同一主机的同一远程目录再次创建时返回已有记录（幂等），与 DSH 同路径创建工作区的幂等一致。
-   * 目录段撞车（不同远程目录消毒后落到同一段）时追加短哈希区分。
+   * 落位是确定性的（目录段与撞车哈希都只由 hostId + remotePath 决定），先落位再判幂等：
+   * 已有同主机同远程目录的登记落在同一位置（含带哈希后缀的目录）时直接返回。
+   * 旧版本把占位目录建在 <endpoint>/<标题>：命中旧布局登记时保留旧登记，只新增新布局登记
+   * （同一远程目录允许多条登记并存；不删旧登记也不动旧目录——已有会话的 cwd 还引用它，
+   * 删了登记它们就静默失联）。目录段撞车（不同远程目录消毒后落到同一段）时追加短哈希区分。
    */
   create(input: { hostId: string; endpoint: string; remotePath: string; title: string }): RemoteBinding {
-    const existing = this.list().find((b) => b.hostId === input.hostId && b.remotePath === input.remotePath)
-    if (existing !== undefined && existsSync(existing.localPath)) {
-      // 旧版本把占位目录建在 <endpoint>/<标题>；命中旧布局时迁移登记到新布局路径
-      // （不动旧目录本身：已有会话的 cwd 还引用它，迁会话是使用者的决定）。
-      const wanted = path.join(remoteWorkspacesRoot(), safeSegment(input.endpoint), ...remotePathSegments(input.remotePath))
-      if (pathKey(existing.localPath) === pathKey(wanted)) return existing
-      const migrated = this.freshRegistration(input, this.availableDir(input, wanted))
-      this.load().delete(pathKey(existing.localPath))
-      this.persist()
-      return migrated
-    }
-
-    const parent = path.join(remoteWorkspacesRoot(), safeSegment(input.endpoint))
-    const dir = this.availableDir(input, path.join(parent, ...remotePathSegments(input.remotePath)))
+    const dir = this.availableDir(input)
+    const same = this.list().find(
+      (b) =>
+        b.hostId === input.hostId &&
+        b.remotePath === input.remotePath &&
+        existsSync(b.localPath) &&
+        pathKey(b.localPath) === pathKey(dir)
+    )
+    if (same !== undefined) return same
     return this.freshRegistration(input, dir)
   }
 
-  /** 目录段撞车（不同远程目录消毒后落到同一段）时追加短哈希，返回一个不与别的远程目录冲突的落位。 */
-  private availableDir(input: { hostId: string; endpoint: string; remotePath: string }, dir: string): string {
-    const occupied = (candidate: string): boolean => {
+  /**
+   * 返回一个不与别的远程目录冲突的落位：逐级检查从 endpoint 根到末级的每一层，
+   * 某层已被「别的」远程目录占据（登记或 meta 指向的远程路径不包含 input）时，
+   * 从该层起目录名追加短哈希让位（确定性，重复创建落位一致）——否则占位目录会挂进别人的地盘
+   * （例如 /srv/a*b/c 落进 /srv/a:b 的目录；大小写不敏感的文件系统上 /root/App 落进 /root/app）。
+   * 占据者包含 input（input 在其远程路径内部）是合法嵌套，照常穿过；
+   * 没有 meta 的目录是占位路径的中间层（例如先建了 /root/Yunzai，就有了 …/root），照旧收编。
+   */
+  private availableDir(input: { hostId: string; endpoint: string; remotePath: string }): string {
+    const root = path.join(remoteWorkspacesRoot(), safeSegment(input.endpoint))
+    return this.walkAvailable(input, root, remotePathSegments(input.remotePath))
+  }
+
+  /** availableDir 的递归体：从 startDir 起逐级落下 segs，逐级做占据检查与让位。 */
+  private walkAvailable(input: { hostId: string; endpoint: string; remotePath: string }, startDir: string, segs: string[]): string {
+    const digest = createHash('sha256').update(`${input.hostId}\n${input.remotePath}`).digest('hex')
+    const claimOf = (candidate: string): string | undefined => {
       const other = this.load().get(pathKey(candidate))
-      if (other !== undefined) return other.hostId !== input.hostId || other.remotePath !== input.remotePath
-      if (!existsSync(candidate)) return false
-      const meta = this.fromMetaNoPersist(candidate)
-      // 没有 meta 的目录是别的远程工作区占位路径的中间层（例如先建了 /root/Yunzai，就有了 …/root）：
-      // 收编它，创建顺序才不会决定嵌套关系；带 meta 且指向别的远程目录的目录仍然让位（追加短哈希）。
-      return meta !== undefined && meta.remotePath !== input.remotePath
+      if (other !== undefined) return other.remotePath
+      if (!existsSync(candidate)) return undefined
+      return this.fromMetaNoPersist(candidate)?.remotePath
     }
-    if (occupied(dir)) {
-      const tag = createHash('sha256').update(`${input.hostId}\n${input.remotePath}`).digest('hex').slice(0, 6)
-      return `${dir}-${tag}`
+    const foreign = (claimed: string | undefined): boolean => claimed !== undefined && !isRemoteInside(input.remotePath, claimed)
+    let dir = startDir
+    let i = 0
+    while (i < segs.length) {
+      const seg = segs[i] as string
+      if (!foreign(claimOf(path.join(dir, seg)))) {
+        dir = path.join(dir, seg)
+        i += 1
+        continue
+      }
+      // 该层被别的远程目录占着：先看同层有没有「已让位的同族目录」（带 meta、其远程路径
+      // 包含 input）——父工作区当年让位到这里，input 属于它的子树，从它内部继续落位，
+      // 父子才不会在盘上被拆成兄弟（/srv/a:b 占着 a_b 时，/srv/a*b 已让位到 a_b-xxxxxx，
+      // 其子目录 /srv/a*b/c 应落在 a_b-xxxxxx/c）。
+      const settled = this.settledInside(input, dir)
+      if (settled !== undefined) {
+        const base = settled.claim === '/' ? '' : settled.claim.replace(/\/+$/, '')
+        const rest = input.remotePath.slice(base.length)
+        const restSegs = rest
+          .split('/')
+          .filter((s) => s !== '' && s !== '.' && s !== '..')
+          .map(folderName)
+        return this.walkAvailable(input, settled.dir, restSegs)
+      }
+      // 没有同族目录：让位。先试 6 位短哈希，仍被占就用完整哈希（防御性兜底，正常到不了）。
+      for (const tag of [digest.slice(0, 6), digest]) {
+        const tagged = path.join(dir, `${seg}-${tag}`)
+        if (foreign(claimOf(tagged))) continue
+        return this.walkAvailable(input, tagged, segs.slice(i + 1))
+      }
+      return this.walkAvailable(input, path.join(dir, `${seg}-${digest}`), segs.slice(i + 1))
     }
     return dir
+  }
+
+  /** 在 dir 的直接子目录里找一个带 meta 且其远程路径包含 input 的「已让位」目录。 */
+  private settledInside(input: { hostId: string; endpoint: string; remotePath: string }, dir: string): { dir: string; claim: string } | undefined {
+    let entries: Dirent[]
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return undefined
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const candidate = path.join(dir, entry.name)
+      const claim = this.fromMetaNoPersist(candidate)?.remotePath
+      if (claim === undefined || !isRemoteInside(input.remotePath, claim)) continue
+      return { dir: candidate, claim }
+    }
+    return undefined
   }
 
   /** 在给定目录落位：建目录、写 meta、登记并持久化（create 的共用尾段）。 */
