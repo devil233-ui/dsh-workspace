@@ -99,6 +99,8 @@ describe('Typert 清单', () => {
     expect(() => codec?.schema.parse(host({ label: '  ' }))).toThrow()
     expect(() => codec?.schema.parse(host({ port: 70000 }))).toThrow()
     expect(() => codec?.schema.parse(host())).not.toThrow()
+    expect(() => codec?.schema.parse(host({ allowLocalShell: true }))).not.toThrow()
+    expect(() => codec?.schema.parse({ ...host(), allowLocalShell: 'true' })).toThrow()
   })
 })
 
@@ -208,6 +210,22 @@ describe('主机编辑语义', () => {
 
   it('引用不存在的跳板机被拒绝', async () => {
     await expectCode(gw.saveHost(host({ jumpHostIds: ['ghost'] })), ERROR_CODES.failed)
+  })
+
+  it('保留本机 shell：默认关闭；可开可关（关时显式覆盖旧值）；不传键 = 不改；锁定时也能读到', async () => {
+    const created = await gw.saveHost(host())
+    expect(created.allowLocalShell).toBeUndefined()
+    expect(rt.vault.getHost(created.id)?.allowLocalShell).toBeUndefined()
+
+    const on = await gw.saveHost(host({ id: created.id, allowLocalShell: true }))
+    expect(on.allowLocalShell).toBe(true)
+    // 旧页面不带这个键（如拖拽改分组）：保持原值。
+    await gw.saveHost(host({ id: created.id, groupPath: 'prod' }))
+    await gw.lock({})
+    expect(rt.vault.getHost(created.id)?.allowLocalShell).toBe(true)
+
+    await gw.saveHost(host({ id: created.id, allowLocalShell: false }))
+    expect(rt.vault.getHost(created.id)?.allowLocalShell).toBe(false)
   })
 })
 

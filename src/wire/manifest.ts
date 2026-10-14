@@ -62,6 +62,7 @@ const saveHost = z.object({
   startupCommand: z.string().max(4000).optional(),
   environmentVariables: env.optional(),
   notes: z.string().max(10000).optional(),
+  allowLocalShell: z.boolean().optional(),
   auth: authInput.nullable().optional(),
   proxy: proxyInput.nullable().optional()
 })
@@ -162,7 +163,6 @@ const INPUTS: Record<MethodName, z.ZodType> = {
     z.object({ source: z.literal('upload'), token: z.string().uuid() })
   ]),
   setFilesTakeover: z.object({ enabled: z.boolean() }),
-  setLocalShell: z.object({ enabled: z.boolean() }),
   presentedFile: z.object({ sessionId: z.string().min(1).max(256), seq: z.number().int().nonnegative(), index: z.number().int().min(0).max(1000) }),
   // 本机只读：是否绝对、是否 UNC / 设备路径由 local-fs.ts 的 resolveReadablePath 按平台校验。
   localRead: z.object({ path: localAbsPath }),

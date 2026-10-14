@@ -38,6 +38,12 @@ export interface HostRecord {
   /** 附加环境变量。 */
   environmentVariables?: Record<string, string>
   notes?: string
+  /**
+   * 该主机的远程工作区会话保留本机 shell（pwsh / powershell / cmd）。缺省 = 隐藏。
+   * 打开后这些命令在**本机**执行（工具链装在本机时用）；只认 `=== true`，不参与分组继承。
+   * 明文字段：挂载 Agent 工具时要在保险箱上锁的情况下也能读到。
+   */
+  allowLocalShell?: boolean
   createdAt: string
   updatedAt: string
 }
@@ -167,6 +173,7 @@ export interface HostView {
   startupCommand?: string
   environmentVariables?: Record<string, string>
   notes?: string
+  allowLocalShell?: boolean
   auth: HostAuthView | null
   proxy: HostProxyView | null
   createdAt: string

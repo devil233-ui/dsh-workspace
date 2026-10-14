@@ -59,6 +59,8 @@ async function setup(options: {
   openInSidebar?: boolean
   /** 在全局层注册 BS 的 sidebar_open 替身（与 BS 实际一致：ctx.tools.register 全局）。 */
   withBs?: boolean
+  /** 主机配置「保留本机 shell」的替身（deps.keepLocalShell）。 */
+  keepLocalShell?: (hostId: string) => boolean
 }) {
   const ctx = new Context()
   if (options.attachments !== undefined) {
@@ -217,12 +219,15 @@ async function setup(options: {
     openOn = on
     for (const l of openListeners) l()
   }
+  const localShellAgents = new WeakSet<object>()
   mountAgentTools(ctx as never, {
     rt,
     bindings,
     preimages: new PreimageStore(() => path.join(sandbox, 'pre')),
     backendFor: () => backend,
     defineTool: defineTool as (d: unknown) => unknown,
+    ...(options.keepLocalShell !== undefined ? { keepLocalShell: options.keepLocalShell } : {}),
+    localShellAgents,
     ...(options.openInSidebar !== undefined
       ? {
           openInSidebar: {
@@ -254,7 +259,7 @@ async function setup(options: {
       content: Array<{ text?: string }>
       isError?: boolean
     }>
-  return { ctx, tools: runtime, backend, binding, makeAgent, created, call, logs, builtinPresentCalls, setOpen, openListeners, presetKey: usePreset ? presetKey : undefined }
+  return { ctx, tools: runtime, backend, binding, makeAgent, created, call, logs, localShellAgents, builtinPresentCalls, setOpen, openListeners, presetKey: usePreset ? presetKey : undefined }
 }
 
 describe('远程工具注册（真实 ToolRuntime + 真实先读后写策略）', () => {
@@ -336,6 +341,50 @@ describe('远程工具注册（真实 ToolRuntime + 真实先读后写策略）'
     const s = await setup({ withBash: false })
     await s.created(s.makeAgent(s.binding.localPath, 'remote-log'))
     expect(s.logs.some((m) => /远程会话已接管 Agent 工具：read, write, bash, hide pwsh/.test(m))).toBe(true)
+  })
+
+  it('主机配置保留本机 shell：只有该主机的远程会话保留 pwsh，并按 warn 留痕', async () => {
+    const seen: string[] = []
+    const s = await setup({
+      withBash: false,
+      keepLocalShell: (hostId) => {
+        seen.push(hostId)
+        return hostId === 'h1'
+      }
+    })
+    const remote = s.makeAgent(s.binding.localPath, 'remote-keep')
+    await s.created(remote)
+    const names = s.tools.schemas(remote as never).map((t: { name: string }) => t.name)
+    expect(names).toContain('pwsh')
+    expect(names).toContain('bash')
+    expect(seen).toEqual(['h1'])
+    expect(s.logs.some((m) => /hide pwsh/.test(m))).toBe(false)
+    expect(s.logs.some((m) => /保留本机 shell：pwsh .*命令将在本机执行/.test(m))).toBe(true)
+    // 记下「挂载时实际保留了」：会话中途关掉开关，提示词仍要说明 pwsh 跑在本机；Agent 释放后移除。
+    expect(s.localShellAgents.has(remote)).toBe(true)
+    ;(s.ctx as unknown as { emit(e: string, p: unknown): void }).emit('agent/disposed', { agent: remote })
+    expect(s.localShellAgents.has(remote)).toBe(false)
+  })
+
+  it('主机配置未开启 / 读取抛错时按默认隐藏 pwsh，其余工具照常接管', async () => {
+    const off = await setup({ withBash: false, keepLocalShell: () => false })
+    const a = off.makeAgent(off.binding.localPath, 'remote-off')
+    await off.created(a)
+    expect(off.tools.schemas(a as never).map((t: { name: string }) => t.name)).not.toContain('pwsh')
+    expect(off.localShellAgents.has(a)).toBe(false)
+
+    const boom = await setup({
+      withBash: false,
+      keepLocalShell: () => {
+        throw new Error('vault broken')
+      }
+    })
+    const b = boom.makeAgent(boom.binding.localPath, 'remote-boom')
+    await boom.created(b)
+    const names = boom.tools.schemas(b as never).map((t: { name: string }) => t.name)
+    expect(names).not.toContain('pwsh')
+    expect(names).toContain('bash')
+    expect((await boom.call(b, 'read', { file_path: 'README.md' })).isError).not.toBe(true)
   })
 
   it('Agent 释放后作用域注册一并撤下', async () => {
@@ -680,5 +729,13 @@ describe('远程工具注册（真实 ToolRuntime + 真实先读后写策略）'
     expect(remotePromptText({ localPath: 'C:\\ph', hostId: 'h', remotePath: '/srv/app', title: 't', createdAt: '' }, 'box (u@h:22)')).toContain(
       'remote SSH workspace on box (u@h:22), rooted at /srv/app'
     )
+  })
+
+  it('remotePromptText：保留本机 shell 时说明 pwsh 跑在本机，默认不提', () => {
+    const binding = { localPath: 'C:\\ph', hostId: 'h', remotePath: '/srv/app', title: 't', createdAt: '' }
+    expect(remotePromptText(binding, 'box')).not.toContain('pwsh')
+    const text = remotePromptText(binding, 'box', true)
+    expect(text).toContain('they run on THIS computer, not on box')
+    expect(text).toContain('C:\\ph')
   })
 })

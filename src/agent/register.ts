@@ -60,7 +60,7 @@ interface AgentLike {
 
 /**
  * 本地 shell 工具：远程会话里默认隐藏，否则模型可能在本机执行命令。
- * 偏好 allowLocalShell 打开时保留它们 —— 此时命令确实跑在本机（设置页有警示、连接日志留痕）。
+ * 主机配置 allowLocalShell 打开时保留它们 —— 此时命令确实跑在本机（主机表单有警示、日志留痕、提示词说明）。
  */
 const LOCAL_SHELLS = ['pwsh', 'powershell', 'cmd']
 
@@ -77,6 +77,16 @@ export interface AgentToolsDeps {
    * 此时本地会话仍保持「不注册任何东西」。
    */
   openInSidebar?: { enabled(): boolean; subscribe(listener: () => void): () => void }
+  /**
+   * 该主机的远程会话是否保留本机 shell（主机配置 allowLocalShell）。不传 = 一律隐藏。
+   * 在会话挂载工具时读一次：改了主机配置要重开会话才生效。
+   */
+  keepLocalShell?: (hostId: string) => boolean
+  /**
+   * 挂载时实际保留了本机 shell 的 Agent（系统提示词据此说明 pwsh 跑在本机）。
+   * 不能只看提示词生成时的主机配置：会话中途关掉开关后，已挂载的 pwsh 仍在清单里，提示词却不再说明它跑在本机。
+   */
+  localShellAgents?: WeakSet<object>
 }
 
 /**
@@ -274,10 +284,13 @@ export function mountAgentTools(ctx: Context, deps: AgentToolsDeps): () => void 
         return true
       })
       // 本机 shell：默认从清单里去掉；去不掉就用同名的拒绝版本遮蔽，绝不让它在本机执行。
-      // 偏好 allowLocalShell 打开时不隐藏 —— 命令会真的在本机执行（设置页有警示、连接日志留痕）。
-      // 偏好可能缺席（测试夹具 / 旧宿主）：缺席按默认（隐藏）处理，这里绝不抛错 ——
-      // 本行在 step 之外，inject 回调里抛错会让 cordis 回滚本次已做的全部注册。
-      const keepLocalShells = deps.rt.prefs?.get().allowLocalShell === true
+      // 主机配置 allowLocalShell 打开时不隐藏 —— 命令会真的在本机执行。
+      const keepLocalShells = safeKeepLocalShell(deps, binding.hostId)
+      if (keepLocalShells) {
+        const kept = LOCAL_SHELLS.filter((n) => builtinOf(n) !== undefined)
+        if (kept.length > 0) deps.localShellAgents?.add(agent)
+        deps.rt.log.warn(binding.hostId, 'agent', `该主机配置了保留本机 shell：${kept.join(', ') || '（本机没有可保留的 shell）'} 在此远程会话里可用，命令将在本机执行（${agent.session.id ?? '?'}）。`)
+      }
       for (const name of (keepLocalShells ? [] : LOCAL_SHELLS).filter((n) => builtinOf(n) !== undefined)) {
         step(`hide ${name}`, () => {
           try {
@@ -343,6 +356,7 @@ export function mountAgentTools(ctx: Context, deps: AgentToolsDeps): () => void 
     const fiber = scopes.get(agent)
     if (fiber === undefined) return
     scopes.delete(agent)
+    deps.localShellAgents?.delete(agent)
     openOffs.get(agent)?.()
     void fiber.dispose()
   }
@@ -369,9 +383,29 @@ export function mountAgentTools(ctx: Context, deps: AgentToolsDeps): () => void 
   }
 }
 
-/** 系统提示词：只对远程会话输出内容，本地会话返回空串（dsh-remote issue #13 的教训）。 */
-export function remotePromptText(binding: RemoteBinding | undefined, hostLabel: string): string {
+/** 读主机配置「保留本机 shell」；读取失败按默认（隐藏）处理 —— 这里绝不抛错，否则 cordis 会回滚本次 inject 里的全部注册。 */
+function safeKeepLocalShell(deps: AgentToolsDeps, hostId: string): boolean {
+  try {
+    return deps.keepLocalShell?.(hostId) === true
+  } catch (error) {
+    deps.rt.log.error(hostId, 'agent', '读取主机配置 allowLocalShell 失败，按默认隐藏本机 shell', error)
+    return false
+  }
+}
+
+/**
+ * 系统提示词：只对远程会话输出内容，本地会话返回空串（dsh-remote issue #13 的教训）。
+ * @param keepLocalShell 该主机配置了保留本机 shell：必须告诉模型 pwsh 等跑在本机，否则它会把本机结果当成服务器结果。
+ */
+export function remotePromptText(binding: RemoteBinding | undefined, hostLabel: string, keepLocalShell = false): string {
   if (binding === undefined) return ''
+  const localShell = keepLocalShell
+    ? [
+        // 写成「如果有」：工具清单在会话挂载时定下，会话中途刚打开开关时工具还没挂上（中途关掉的情况由调用方按已挂载状态兜住）。
+        `If pwsh / powershell / cmd tools are available in this session, they run on THIS computer, not on ${hostLabel}; their default working directory is the local placeholder ${binding.localPath}.`,
+        'Use bash for anything about the remote workspace. Only use the local shells when the user explicitly needs this computer (comparing environments, local tools reaching services on the remote host, local files). They cannot see remote files; never treat their output as describing the remote host.'
+      ]
+    : []
   return [
     `This session's workspace is a remote SSH workspace on ${hostLabel}, rooted at ${binding.remotePath}.`,
     'The read, write, edit, glob, grep and bash tools operate on that remote host, not on this computer.',
@@ -380,7 +414,8 @@ export function remotePromptText(binding: RemoteBinding | undefined, hostLabel: 
     'bash runs `bash -lc` on the remote host in a fresh shell each call (pass workdir instead of cd). run_in_background is unavailable; for long-running processes use `nohup <cmd> > /tmp/<name>.log 2>&1 &` and read the log.',
     'present accepts remote paths (absolute or relative to the workspace root); the delivery card opens a preview of the remote file in the sidebar. Files on this computer can still be presented, but not mixed with remote files in one call.',
     'Local files cannot be copied to the remote host by path. To put an image or file from this conversation (pasted by the user or produced by a tool) into the workspace, use upload_to_remote with its attachment id (sha256:…) and a path relative to the workspace root.',
-    'Never run `git commit`, `git push`, `git reset --hard`, `git rebase` or other history-changing git commands on the remote host unless the user explicitly asks for that exact action in this conversation; leave changes uncommitted and tell the user.'
+    'Never run `git commit`, `git push`, `git reset --hard`, `git rebase` or other history-changing git commands on the remote host unless the user explicitly asks for that exact action in this conversation; leave changes uncommitted and tell the user.',
+    ...localShell
   ].join('\n')
 }
 

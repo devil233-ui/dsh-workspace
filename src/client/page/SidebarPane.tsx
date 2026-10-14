@@ -45,8 +45,6 @@ export function SidebarPane(props: SidebarPaneProps) {
   const prefs = useSidebarPrefs()
   const api = useMemo<WorkspaceApi>(() => ({ call: (method, payload) => props.call(method, payload) }), [props.call])
   const [filesOn, setFilesOn] = useState<boolean | null>(null)
-  /** 远程工作区会话是否保留本机 shell（默认关闭，见 prefs.allowLocalShell）。 */
-  const [localShell, setLocalShell] = useState<boolean | null>(null)
   const [filesStatus, setFilesStatus] = useState<TakeoverStatus>(filesTakeover.status())
   const [ignore, setIgnore] = useState<{ rules: string[]; defaults: string[] } | null>(null)
   useEffect(() => filesTakeover.subscribe(() => setFilesStatus(filesTakeover.status())), [])
@@ -55,7 +53,6 @@ export function SidebarPane(props: SidebarPaneProps) {
     // 进入页签时取一次最新值：别的窗口改过偏好时这里能看到。
     void props.call('getPrefs', {}).then((p) => {
       setFilesOn(p.takeoverFilesSidebar)
-      setLocalShell(p.allowLocalShell)
       setIgnore({ rules: p.ignore, defaults: p.defaultIgnore })
       setSidebarPrefs(p.sidebar)
     }, props.onError)
@@ -76,17 +73,6 @@ export function SidebarPane(props: SidebarPaneProps) {
       },
       (error: unknown) => {
         setFilesOn(!next)
-        props.onError(error)
-      }
-    )
-  }
-
-  const changeLocalShell = (next: boolean): void => {
-    setLocalShell(next)
-    void props.call('setLocalShell', { enabled: next }).then(
-      (p) => setLocalShell(p.allowLocalShell),
-      (error: unknown) => {
-        setLocalShell(!next)
         props.onError(error)
       }
     )
@@ -142,17 +128,6 @@ export function SidebarPane(props: SidebarPaneProps) {
           }
           disabled={filesOn === null}
           control={<Switch checked={filesOn === true} label={t('settings.filesTakeover')} disabled={filesOn === null} onChange={changeFilesTakeover} />}
-        />
-        <SettingRow
-          title={t('settings.localShell')}
-          desc={
-            <>
-              {t('settings.localShellHint')}
-              {localShell === true ? <span className="dshws-set-note" data-tone="warn">{t('settings.localShellOn')}</span> : null}
-            </>
-          }
-          disabled={localShell === null}
-          control={<Switch checked={localShell === true} label={t('settings.localShell')} disabled={localShell === null} onChange={changeLocalShell} />}
         />
       </section>
 
