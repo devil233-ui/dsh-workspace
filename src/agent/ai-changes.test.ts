@@ -107,4 +107,16 @@ describe('foldAiChanges', () => {
     expect(r.turn).toBe(2)
     expect(r.files[0]).toMatchObject({ ops: 1, turnOps: 0 })
   })
+
+  it('远程会话不计本机 shell 的删除（主机保留本机 shell 时它删的是本机文件）；本机会话照常计入', () => {
+    seq = 0
+    const events = [
+      turnStart(1),
+      call(1, 'a', 'pwsh', { command: 'Remove-Item foo.txt' }),
+      call(1, 'b', 'cmd', { command: 'del /q bar.txt' }),
+      call(1, 'c', 'bash', { command: 'rm baz.txt', description: 'rm' })
+    ]
+    expect(foldAiChanges(events, resolve, { remote: true }).files.map((f) => f.path)).toEqual(['/srv/app/baz.txt'])
+    expect(foldAiChanges(events, resolve).files.map((f) => f.path)).toContain('/srv/app/foo.txt')
+  })
 })

@@ -58,7 +58,10 @@ interface AgentLike {
   session: { id?: string; header: { cwd?: string } }
 }
 
-/** 本地 shell 工具：远程会话里必须隐藏，否则模型可能在本机执行命令。 */
+/**
+ * 本地 shell 工具：远程会话里默认隐藏，否则模型可能在本机执行命令。
+ * 主机配置 allowLocalShell 打开时保留它们 —— 此时命令确实跑在本机（主机表单有警示、日志留痕、提示词说明）。
+ */
 const LOCAL_SHELLS = ['pwsh', 'powershell', 'cmd']
 
 export interface AgentToolsDeps {
@@ -74,6 +77,18 @@ export interface AgentToolsDeps {
    * 此时本地会话仍保持「不注册任何东西」。
    */
   openInSidebar?: { enabled(): boolean; subscribe(listener: () => void): () => void }
+  /**
+   * 该主机的远程会话是否保留本机 shell（主机配置 allowLocalShell）。不传 = 一律隐藏。
+   * 挂载时读一次，之后每次 subscribeHosts 通知再读，已打开的会话从下一轮对话起按新配置生效。
+   */
+  keepLocalShell?: (hostId: string) => boolean
+  /** 主机配置变化订阅（保险箱写盘后通知）。不传 = 只在挂载时读一次。 */
+  subscribeHosts?: (listener: () => void) => () => void
+  /**
+   * 当前实际保留着本机 shell 的 Agent（系统提示词据此说明 pwsh 跑在本机），随配置变化即时增删。
+   * 提示词以它为准而不是只看主机配置：两者在同步完成前的瞬间可能不一致。
+   */
+  localShellAgents?: WeakSet<object>
 }
 
 /**
@@ -212,6 +227,98 @@ export function mountAgentTools(ctx: Context, deps: AgentToolsDeps): () => void 
     })
   }
 
+  // ---------------------------------------------------------------- 本机 shell（远程会话，按主机配置即时同步）
+  /** 每个远程 Agent 的本机 shell 清理函数（撤销主机配置订阅与隐藏）。 */
+  const shellOffs = new Map<AgentLike, () => void>()
+
+  /**
+   * 远程会话里的本机 shell（pwsh / powershell / cmd）：主机配置 allowLocalShell 关闭时隐藏，打开时保留
+   * （命令真的在本机执行）。主机配置变化即时同步：已打开的会话不用重建，下一轮对话起按新配置生效 ——
+   * 关闭尤其要即时，用户关开关就是在收回权限。
+   * 隐藏优先 restrict 从清单里去掉；去不掉就用同名的拒绝版本遮蔽，绝不让它在本机执行。
+   * @returns 首次同步隐藏了的工具（接管日志用）与隐藏失败的工具
+   */
+  const mountLocalShells = (
+    agent: AgentLike,
+    binding: RemoteBinding,
+    tools: ScopedTools,
+    builtins: Array<[string, ToolDefinitionLike]>
+  ): { hidden: string[]; failed: string[] } => {
+    // inject 回调可能因 tools 服务重建而重跑：先清掉上一轮的订阅。
+    shellOffs.get(agent)?.()
+    const result = { hidden: [] as string[], failed: [] as string[] }
+    if (builtins.length === 0) return result
+    const names = builtins.map(([name]) => name).join(', ')
+    const session = agent.session.id ?? '?'
+
+    const hideAll = (): (() => void) => {
+      const offs: Array<() => void> = []
+      for (const [name, builtin] of builtins) {
+        try {
+          try {
+            offs.push(tools.restrict({ deny: [name] }))
+          } catch {
+            offs.push(
+              tools.register({
+                ...builtin,
+                execute: async () => {
+                  throw new Error(`${name} is not available in a remote workspace (it would run on the local computer); use bash, which runs on the remote host`)
+                }
+              })
+            )
+          }
+          result.hidden.push(name)
+        } catch (error) {
+          result.failed.push(`hide ${name}`)
+          deps.rt.log.error(binding.hostId, 'agent', `隐藏本机 shell ${name} 失败`, error)
+        }
+      }
+      return () => {
+        for (const off of offs.reverse()) {
+          try {
+            off()
+          } catch {
+            /* 作用域已随 Agent 释放：注册已被一并撤下 */
+          }
+        }
+      }
+    }
+
+    let state: 'hidden' | 'kept' | undefined
+    let unhide: (() => void) | undefined
+    const sync = (initial: boolean): void => {
+      const next = safeKeepLocalShell(deps, binding.hostId) ? 'kept' : 'hidden'
+      if (next === state) return
+      if (next === 'hidden') {
+        unhide = hideAll()
+        deps.localShellAgents?.delete(agent)
+        if (!initial) deps.rt.log.warn(binding.hostId, 'agent', `主机配置已关闭本机 shell：此远程会话里的 ${names} 已隐藏，下一轮对话起不可用（${session}）。`)
+      } else {
+        unhide?.()
+        unhide = undefined
+        deps.localShellAgents?.add(agent)
+        deps.rt.log.warn(
+          binding.hostId,
+          'agent',
+          initial
+            ? `该主机配置了保留本机 shell：${names} 在此远程会话里可用，命令将在本机执行（${session}）。`
+            : `主机配置已打开本机 shell：此远程会话里的 ${names} 下一轮对话起可用，命令将在本机执行（${session}）。`
+        )
+      }
+      state = next
+    }
+    sync(true)
+    const unsubscribe = deps.subscribeHosts?.(() => sync(false)) ?? (() => undefined)
+    shellOffs.set(agent, () => {
+      unsubscribe()
+      unhide?.()
+      unhide = undefined
+      deps.localShellAgents?.delete(agent)
+      shellOffs.delete(agent)
+    })
+    return result
+  }
+
   const attach = (agent: AgentLike): void => {
     if (scopes.has(agent)) return
     const binding = deps.bindings.resolve(agent.session?.header?.cwd)
@@ -270,22 +377,19 @@ export function mountAgentTools(ctx: Context, deps: AgentToolsDeps): () => void 
         tools.register(deps.defineTool(remoteBashDefinition(binding, env, guard)))
         return true
       })
-      // 本机 shell：优先从清单里去掉；去不掉就用同名的拒绝版本遮蔽，绝不让它在本机执行。
-      for (const name of LOCAL_SHELLS.filter((n) => builtinOf(n) !== undefined)) {
-        step(`hide ${name}`, () => {
-          try {
-            tools.restrict({ deny: [name] })
-          } catch {
-            const builtin = builtinOf(name) as ToolDefinitionLike
-            tools.register({
-              ...builtin,
-              execute: async () => {
-                throw new Error(`${name} is not available in a remote workspace (it would run on the local computer); use bash, which runs on the remote host`)
-              }
-            })
-          }
-          return true
+      // 本机 shell：按主机配置隐藏 / 保留，配置变化即时同步（见 mountLocalShells）。
+      // 内置定义先取好：隐藏后再查可能查不到 / 查到遮蔽版本，恢复时要用原定义。
+      try {
+        const builtins = LOCAL_SHELLS.flatMap((n): Array<[string, ToolDefinitionLike]> => {
+          const builtin = builtinOf(n)
+          return builtin === undefined ? [] : [[n, builtin]]
         })
+        const shells = mountLocalShells(agent, binding, tools, builtins)
+        taken.push(...shells.hidden.map((n) => `hide ${n}`))
+        failed.push(...shells.failed)
+      } catch (error) {
+        failed.push('local shells')
+        deps.rt.log.error(binding.hostId, 'agent', '处理本机 shell 失败', error)
       }
       // 附件上传：宿主没有附件服务（旧版）或拿不到 defineTool 时不注册，不暴露一个必然失败的工具。
       step(UPLOAD_TOOL_NAME, () => {
@@ -336,6 +440,8 @@ export function mountAgentTools(ctx: Context, deps: AgentToolsDeps): () => void 
     const fiber = scopes.get(agent)
     if (fiber === undefined) return
     scopes.delete(agent)
+    shellOffs.get(agent)?.()
+    deps.localShellAgents?.delete(agent)
     openOffs.get(agent)?.()
     void fiber.dispose()
   }
@@ -362,9 +468,29 @@ export function mountAgentTools(ctx: Context, deps: AgentToolsDeps): () => void 
   }
 }
 
-/** 系统提示词：只对远程会话输出内容，本地会话返回空串（dsh-remote issue #13 的教训）。 */
-export function remotePromptText(binding: RemoteBinding | undefined, hostLabel: string): string {
+/** 读主机配置「保留本机 shell」；读取失败按默认（隐藏）处理 —— 这里绝不抛错，否则 cordis 会回滚本次 inject 里的全部注册。 */
+function safeKeepLocalShell(deps: AgentToolsDeps, hostId: string): boolean {
+  try {
+    return deps.keepLocalShell?.(hostId) === true
+  } catch (error) {
+    deps.rt.log.error(hostId, 'agent', '读取主机配置 allowLocalShell 失败，按默认隐藏本机 shell', error)
+    return false
+  }
+}
+
+/**
+ * 系统提示词：只对远程会话输出内容，本地会话返回空串（dsh-remote issue #13 的教训）。
+ * @param keepLocalShell 该主机配置了保留本机 shell：必须告诉模型 pwsh 等跑在本机，否则它会把本机结果当成服务器结果。
+ */
+export function remotePromptText(binding: RemoteBinding | undefined, hostLabel: string, keepLocalShell = false): string {
   if (binding === undefined) return ''
+  const localShell = keepLocalShell
+    ? [
+        // 写成「如果有」：调用方在拿不到会话实际状态时按主机配置判断，此时本机可能根本没有这些 shell（如 macOS / Linux）。
+        `If pwsh / powershell / cmd tools are available in this session, they run on THIS computer, not on ${hostLabel}; their default working directory is the local placeholder ${binding.localPath}.`,
+        'Use bash for anything about the remote workspace. Only use the local shells when the user explicitly needs this computer (comparing environments, local tools reaching services on the remote host, local files). They cannot see remote files; never treat their output as describing the remote host.'
+      ]
+    : []
   return [
     `This session's workspace is a remote SSH workspace on ${hostLabel}, rooted at ${binding.remotePath}.`,
     'The read, write, edit, glob, grep and bash tools operate on that remote host, not on this computer.',
@@ -373,7 +499,8 @@ export function remotePromptText(binding: RemoteBinding | undefined, hostLabel: 
     'bash runs `bash -lc` on the remote host in a fresh shell each call (pass workdir instead of cd). run_in_background is unavailable; for long-running processes use `nohup <cmd> > /tmp/<name>.log 2>&1 &` and read the log.',
     'present accepts remote paths (absolute or relative to the workspace root); the delivery card opens a preview of the remote file in the sidebar. Files on this computer can still be presented, but not mixed with remote files in one call.',
     'Local files cannot be copied to the remote host by path. To put an image or file from this conversation (pasted by the user or produced by a tool) into the workspace, use upload_to_remote with its attachment id (sha256:…) and a path relative to the workspace root.',
-    'Never run `git commit`, `git push`, `git reset --hard`, `git rebase` or other history-changing git commands on the remote host unless the user explicitly asks for that exact action in this conversation; leave changes uncommitted and tell the user.'
+    'Never run `git commit`, `git push`, `git reset --hard`, `git rebase` or other history-changing git commands on the remote host unless the user explicitly asks for that exact action in this conversation; leave changes uncommitted and tell the user.',
+    ...localShell
   ].join('\n')
 }
 

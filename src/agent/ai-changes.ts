@@ -19,6 +19,16 @@ const WRITE_TOOLS = new Set(['write', 'create', UPLOAD_TOOL_NAME])
 const EDIT_TOOLS = new Set(['edit', 'multi_edit', 'multiedit', 'str_replace', 'apply_patch'])
 /** shell 类工具：只从中识别删除命令（rm / Remove-Item），其他写法太多，不猜。 */
 const SHELL_TOOLS = new Set(['bash', 'pwsh', 'shell', 'powershell'])
+/**
+ * 本机 shell（与 agent/register.ts 的 LOCAL_SHELLS 一致）。主机配置了「保留本机 shell」时，远程会话里它们在本机执行，
+ * 删除的是本机文件；按远程工作区解析路径会误报成「远程文件被删」，所以远程会话不计入。
+ */
+const LOCAL_SHELL_TOOLS = new Set(['pwsh', 'powershell', 'cmd'])
+
+export interface FoldOptions {
+  /** 远程工作区会话：跳过本机 shell 的调用。 */
+  remote?: boolean
+}
 
 /** 一次涉及文件的调用（折叠的中间结果）。 */
 export interface AiOp {
@@ -197,7 +207,7 @@ function opOfCall(name: string, rawArgs: unknown): { kind: AiOpKind; paths: stri
  * 折叠事件为文件操作列表（按事件顺序）。tool/call 记下操作，对应的 tool/result 报错则剔除；
  * 还没有结果的调用（正在执行）保留 —— 写入往往在结果返回前就已落盘。
  */
-export function extractAiOps(events: readonly unknown[]): { ops: AiOp[]; turn: number | null } {
+export function extractAiOps(events: readonly unknown[], opts: FoldOptions = {}): { ops: AiOp[]; turn: number | null } {
   const byCall = new Map<string, AiOp>()
   let turn: number | null = null
   const seeTurn = (t: unknown): void => {
@@ -213,6 +223,7 @@ export function extractAiOps(events: readonly unknown[]): { ops: AiOp[]; turn: n
     } else if (event.type === 'tool/call') {
       seeTurn(data.turn)
       if (typeof data.name !== 'string' || typeof data.callId !== 'string') continue
+      if (opts.remote === true && LOCAL_SHELL_TOOLS.has(data.name)) continue
       const op = opOfCall(data.name, data.arguments)
       if (op === undefined) continue
       byCall.set(data.callId, { callId: data.callId, ...op, turn: typeof data.turn === 'number' ? data.turn : null, seq })
@@ -230,8 +241,8 @@ export function extractAiOps(events: readonly unknown[]): { ops: AiOp[]; turn: n
  * 会话事件 → 按文件聚合的改动列表。
  * @param resolve 模型给出的路径 → 绝对路径（侧栏写法）；不属于本会话工作区 / 无法解析时返回 undefined（不计入）
  */
-export function foldAiChanges(events: readonly unknown[], resolve: (raw: string) => string | undefined): AiChangesResult {
-  const { ops, turn } = extractAiOps(events)
+export function foldAiChanges(events: readonly unknown[], resolve: (raw: string) => string | undefined, opts: FoldOptions = {}): AiChangesResult {
+  const { ops, turn } = extractAiOps(events, opts)
   const files = new Map<string, AiChangedFile>()
   for (const op of ops) {
     for (const raw of op.paths) {

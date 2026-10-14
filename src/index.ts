@@ -188,6 +188,10 @@ export function apply(ctx: Context, config: PluginConfig): void {
 
   // P1：远程会话的 Agent 工具。只在会话 cwd 属于远程工作区时接管内置工具，本地会话零影响；
   // 例外是 open_in_sidebar（本机 / 远程都注册，受「侧边栏」偏好 openInSidebar 控制，切换即时生效）。
+  // 主机配置「远程会话保留本机 shell」：getHost 读明文字段，保险箱上锁时也能读到。
+  const keepLocalShell = (hostId: string): boolean => runtime.vault.getHost(hostId)?.allowLocalShell === true
+  /** 当前实际保留着本机 shell 的 Agent：提示词据此说明（随主机配置变化即时增删）。 */
+  const localShellAgents = new WeakSet<object>()
   ctx.effect(
     () =>
       mountAgentTools(ctx, {
@@ -198,11 +202,15 @@ export function apply(ctx: Context, config: PluginConfig): void {
         openInSidebar: {
           enabled: () => runtime.prefs.get().sidebar.openInSidebar,
           subscribe: (listener) => runtime.prefs.subscribe(() => listener())
-        }
+        },
+        keepLocalShell,
+        // 保存主机后已打开的远程会话即时同步（打开 / 关闭都不用重建会话）。
+        subscribeHosts: (listener) => runtime.vault.subscribe(listener),
+        localShellAgents
       }),
     'dsh-workspace: agent tools'
   )
-  inject(['systemPrompt'], (sub) => mountRemotePrompt(sub, runtime))
+  inject(['systemPrompt'], (sub) => mountRemotePrompt(sub, runtime, localShellAgents))
 
   // 所有副作用都挂在 fiber 上，卸载/重载时自动回收。
   // 连接池尤其重要：不回收会留下常驻 SSH 连接与 keepalive 定时器。
@@ -213,7 +221,7 @@ export function apply(ctx: Context, config: PluginConfig): void {
  * 系统提示词：告诉远程会话的模型「工具作用于哪台主机、用什么路径」。
  * 本地会话返回空串 —— 提示词不能对本地会话生效（dsh-remote issue #13）。
  */
-function mountRemotePrompt(ctx: Context, runtime: WorkspaceRuntime): void {
+function mountRemotePrompt(ctx: Context, runtime: WorkspaceRuntime, localShellAgents: WeakSet<object>): void {
   const prompt = (ctx as unknown as {
     systemPrompt: {
       section(section: { name: string; order: number; text: (input: { scope?: unknown }) => string }): unknown
@@ -235,7 +243,9 @@ function mountRemotePrompt(ctx: Context, runtime: WorkspaceRuntime): void {
       if (binding === undefined) return ''
       const host = runtime.vault.listHosts().find((h) => h.id === binding.hostId)
       const label = host === undefined ? binding.hostId : `${host.label} (${host.username}@${host.hostname}:${host.port})`
-      return remotePromptText(binding, label)
+      // 以会话实际状态为准（随配置即时同步）；拿不到会话对象时退回主机配置，提示词用「如果有」措辞兜底。
+      const keep = (typeof scope === 'object' && scope !== null && localShellAgents.has(scope)) || host?.allowLocalShell === true
+      return remotePromptText(binding, label, keep)
     }
   })
   if (typeof disposer === 'function') ctx.effect(() => disposer as () => void, 'dsh-workspace: remote prompt')

@@ -63,6 +63,8 @@ export interface SaveHostInput {
   startupCommand?: string
   environmentVariables?: Record<string, string>
   notes?: string
+  /** 远程会话保留本机 shell（命令在本机执行）。键缺省 = 不改（编辑时保留原值）。 */
+  allowLocalShell?: boolean
   auth?: AuthInput | null
   proxy?: ProxyInput | null
 }

@@ -249,6 +249,7 @@ export class WorkspaceGateway extends RemoteService {
           ...(proxy !== undefined ? { proxy } : {})
         })
         this.rt.log.info(created.id, 'config', `已新增主机「${created.label}」。`)
+        logLocalShellChange(this.rt, created.id, undefined, input.allowLocalShell)
         return viewOf(this.rt, created.id)
       }
 
@@ -273,6 +274,7 @@ export class WorkspaceGateway extends RemoteService {
         this.rt.log.info(existing.id, 'config', '连接参数已变更，已断开旧连接，下次使用时按新配置重连。')
       }
       this.rt.log.info(existing.id, 'config', `已更新主机「${input.label}」。`)
+      logLocalShellChange(this.rt, existing.id, existing.allowLocalShell, input.allowLocalShell)
       return viewOf(this.rt, existing.id)
     })
   }
@@ -956,7 +958,7 @@ export class WorkspaceGateway extends RemoteService {
           return undefined
         }
       }
-      const result = foldAiChanges(got.events, resolve)
+      const result = foldAiChanges(got.events, resolve, { remote: binding !== undefined })
       this.aiCache.set(input.sessionId, { key, result })
       // 只留最近用过的少量会话，避免长时间运行时缓存无限增长。
       if (this.aiCache.size > 32) this.aiCache.delete(this.aiCache.keys().next().value as string)
@@ -1150,6 +1152,21 @@ function viewOf(rt: WorkspaceRuntime, id: string): MethodIO['saveHost'][1] {
   return view
 }
 
+/**
+ * 「远程会话保留本机 shell」变化时留痕（warn）：打开后模型可以在本机执行命令，事后排查要能查到是谁、何时打开的。
+ * next 缺省（旧页面没提交这个键）= 未改，不记。
+ */
+function logLocalShellChange(rt: WorkspaceRuntime, hostId: string, prev: boolean | undefined, next: boolean | undefined): void {
+  if (next === undefined || next === (prev === true)) return
+  rt.log.warn(
+    hostId,
+    'config',
+    next
+      ? '已允许该主机的远程工作区会话调用本机 shell（pwsh / powershell / cmd）—— 这些命令将在本机执行；已打开的会话从下一轮对话起生效。'
+      : '已禁止该主机的远程工作区会话调用本机 shell；已打开的会话从下一轮对话起隐藏。'
+  )
+}
+
 /** 取主机的非凭据字段，空串统一视为「未设置」。 */
 function plainHostFields(input: SaveHostInput): Omit<HostRecord, 'id' | 'createdAt' | 'updatedAt' | 'auth' | 'proxy'> {
   return {
@@ -1163,7 +1180,10 @@ function plainHostFields(input: SaveHostInput): Omit<HostRecord, 'id' | 'created
     ...(input.environmentVariables !== undefined && Object.keys(input.environmentVariables).length > 0
       ? { environmentVariables: input.environmentVariables }
       : {}),
-    ...(nonEmpty(input.notes) ? { notes: input.notes } : {})
+    ...(nonEmpty(input.notes) ? { notes: input.notes } : {}),
+    // 不能像上面那样「只在为真时写入」：updateHost 是合并补丁，关掉时必须显式写 false 才会覆盖旧值；
+    // 键缺省（旧页面提交）= 不改。
+    ...(input.allowLocalShell !== undefined ? { allowLocalShell: input.allowLocalShell } : {})
   }
 }
 
