@@ -116,6 +116,18 @@ export class Vault {
   private data: VaultFileShape = emptyShape()
   private key: Buffer | null = null
   private loaded = false
+  private listeners = new Set<() => void>()
+
+  /**
+   * 保险箱内容写盘后通知（主机 / 分组增删改、导入、改主密码）。宿主端功能据此即时同步，
+   * 如远程会话按主机配置 allowLocalShell 即时保留 / 隐藏本机 shell。返回取消订阅。
+   */
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener)
+    return () => {
+      this.listeners.delete(listener)
+    }
+  }
 
   /** 从磁盘读取。文件不存在视为空保险箱，不报错。 */
   load(): void {
@@ -153,6 +165,14 @@ export class Vault {
     // 已有的 known-hosts / bindings / terminals / prefs 同样按 0600 写、目录 0700 建。
     writeFileSync(tmp, JSON.stringify(this.data, null, 2), { encoding: 'utf8', mode: 0o600 })
     renameWithRetry(tmp, file)
+    // 监听方出错不能影响保存结果（已落盘）。
+    for (const listener of [...this.listeners]) {
+      try {
+        listener()
+      } catch {
+        /* 监听方自行记录日志 */
+      }
+    }
   }
 
   // ---------------------------------------------------------------- 锁状态

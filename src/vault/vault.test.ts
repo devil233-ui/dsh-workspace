@@ -96,6 +96,23 @@ describe('Vault', () => {
     expect(after?.auth).toEqual({ kind: 'password', password: 'p@ss' })
   })
 
+  it('subscribe：写盘后通知（新增 / 修改 / 删除主机），监听方抛错不影响保存，取消订阅后不再通知', () => {
+    const vault = new Vault()
+    let count = 0
+    const off = vault.subscribe(() => {
+      count += 1
+      throw new Error('listener boom')
+    })
+    const host = vault.createHost(baseHost({}))
+    vault.updateHost(host.id, { allowLocalShell: true })
+    expect(vault.getHost(host.id)?.allowLocalShell).toBe(true)
+    vault.deleteHost(host.id)
+    expect(count).toBe(3)
+    off()
+    vault.createHost(baseHost({}))
+    expect(count).toBe(3)
+  })
+
   it('改主密码后旧密码失效、凭据仍可解出', () => {
     const vault = new Vault()
     vault.initialize('old-master')

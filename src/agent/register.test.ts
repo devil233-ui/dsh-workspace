@@ -16,7 +16,8 @@ import { BindingStore } from '../workspace/bindings.js'
 import { PreimageStore } from './preimages.js'
 import { FakeBackend } from './fake-backend.js'
 import { mountAgentTools, readLimitOf, remotePromptText } from './register.js'
-import type { WorkspaceRuntime } from '../runtime.js'
+import { createRuntime, DEFAULT_CONFIG, type WorkspaceRuntime } from '../runtime.js'
+import { WorkspaceGateway } from '../gateway.js'
 
 let sandbox: string
 beforeEach(() => {
@@ -61,6 +62,10 @@ async function setup(options: {
   withBs?: boolean
   /** 主机配置「保留本机 shell」的替身（deps.keepLocalShell）。 */
   keepLocalShell?: (hostId: string) => boolean
+  /** 远程工作区绑定的主机 id（默认 h1）；接真实保险箱时传真实主机 id。 */
+  hostId?: string
+  /** 主机配置变化订阅；不传用测试内的手动通知（notifyHosts）。 */
+  subscribeHosts?: (listener: () => void) => () => void
 }) {
   const ctx = new Context()
   if (options.attachments !== undefined) {
@@ -208,7 +213,7 @@ async function setup(options: {
   backend.addDir('/srv/app')
   backend.put('/srv/app/README.md', 'hello\nworld\n')
   const bindings = new BindingStore()
-  const binding = bindings.create({ hostId: 'h1', endpoint: 'h1', remotePath: '/srv/app', title: 'app' })
+  const binding = bindings.create({ hostId: options.hostId ?? 'h1', endpoint: options.hostId ?? 'h1', remotePath: '/srv/app', title: 'app' })
   const logs: string[] = []
   const push = (_h: string, _c: string, m: string) => logs.push(m)
   const rt = { log: { info: push, warn: push, error: push } } as unknown as WorkspaceRuntime
@@ -220,6 +225,10 @@ async function setup(options: {
     for (const l of openListeners) l()
   }
   const localShellAgents = new WeakSet<object>()
+  const hostListeners = new Set<() => void>()
+  const notifyHosts = (): void => {
+    for (const l of [...hostListeners]) l()
+  }
   mountAgentTools(ctx as never, {
     rt,
     bindings,
@@ -228,6 +237,14 @@ async function setup(options: {
     defineTool: defineTool as (d: unknown) => unknown,
     ...(options.keepLocalShell !== undefined ? { keepLocalShell: options.keepLocalShell } : {}),
     localShellAgents,
+    subscribeHosts:
+      options.subscribeHosts ??
+      ((l: () => void) => {
+        hostListeners.add(l)
+        return () => {
+          hostListeners.delete(l)
+        }
+      }),
     ...(options.openInSidebar !== undefined
       ? {
           openInSidebar: {
@@ -259,7 +276,7 @@ async function setup(options: {
       content: Array<{ text?: string }>
       isError?: boolean
     }>
-  return { ctx, tools: runtime, backend, binding, makeAgent, created, call, logs, localShellAgents, builtinPresentCalls, setOpen, openListeners, presetKey: usePreset ? presetKey : undefined }
+  return { ctx, tools: runtime, backend, binding, makeAgent, created, call, logs, localShellAgents, hostListeners, notifyHosts, builtinPresentCalls, setOpen, openListeners, presetKey: usePreset ? presetKey : undefined }
 }
 
 describe('远程工具注册（真实 ToolRuntime + 真实先读后写策略）', () => {
@@ -360,10 +377,80 @@ describe('远程工具注册（真实 ToolRuntime + 真实先读后写策略）'
     expect(seen).toEqual(['h1'])
     expect(s.logs.some((m) => /hide pwsh/.test(m))).toBe(false)
     expect(s.logs.some((m) => /保留本机 shell：pwsh .*命令将在本机执行/.test(m))).toBe(true)
-    // 记下「挂载时实际保留了」：会话中途关掉开关，提示词仍要说明 pwsh 跑在本机；Agent 释放后移除。
+    // 记下「当前实际保留着」（提示词据此说明 pwsh 跑在本机）；Agent 释放后移除。
     expect(s.localShellAgents.has(remote)).toBe(true)
     ;(s.ctx as unknown as { emit(e: string, p: unknown): void }).emit('agent/disposed', { agent: remote })
     expect(s.localShellAgents.has(remote)).toBe(false)
+  })
+
+  it('主机配置变化即时同步：已打开的会话里打开 → 出现 pwsh，关闭 → 立即隐藏；Agent 释放后取消订阅', async () => {
+    let on = false
+    const s = await setup({ withBash: false, keepLocalShell: () => on })
+    const remote = s.makeAgent(s.binding.localPath, 'remote-live')
+    await s.created(remote)
+    const names = (): string[] => s.tools.schemas(remote as never).map((t: { name: string }) => t.name)
+    expect(names()).not.toContain('pwsh')
+    expect(s.hostListeners.size).toBe(1)
+
+    on = true
+    s.notifyHosts()
+    expect(names()).toContain('pwsh')
+    expect(s.localShellAgents.has(remote)).toBe(true)
+    expect(s.logs.some((m) => /主机配置已打开本机 shell/.test(m))).toBe(true)
+
+    // 无关的保险箱变化（配置没变）不重复处理
+    const before = s.logs.length
+    s.notifyHosts()
+    expect(s.logs.length).toBe(before)
+
+    on = false
+    s.notifyHosts()
+    expect(names()).not.toContain('pwsh')
+    expect(names()).toContain('bash')
+    expect(s.localShellAgents.has(remote)).toBe(false)
+    expect(s.logs.some((m) => /主机配置已关闭本机 shell/.test(m))).toBe(true)
+
+    ;(s.ctx as unknown as { emit(e: string, p: unknown): void }).emit('agent/disposed', { agent: remote })
+    expect(s.hostListeners.size).toBe(0)
+  })
+
+  it('【端到端】网关保存主机 → 保险箱通知 → 已打开的会话即时同步（与 index.ts 同样的接线，保险箱上锁也生效）', async () => {
+    const real = createRuntime(DEFAULT_CONFIG, { persistTerminals: false })
+    try {
+      const gw = new WorkspaceGateway(new Context(), real)
+      await gw.initVault({ password: 'master-pw' })
+      const base = { label: 'srv', hostname: '10.0.0.1', port: 22, username: 'root', groupPath: '', jumpHostIds: [] as string[] }
+      const saved = await gw.saveHost({ ...base, auth: { kind: 'agent' } })
+      const s = await setup({
+        withBash: false,
+        hostId: saved.id,
+        keepLocalShell: (hostId) => real.vault.getHost(hostId)?.allowLocalShell === true,
+        subscribeHosts: (l) => real.vault.subscribe(l)
+      })
+      const remote = s.makeAgent(s.binding.localPath, 'remote-e2e')
+      await s.created(remote)
+      const names = (): string[] => s.tools.schemas(remote as never).map((t: { name: string }) => t.name)
+      expect(names()).not.toContain('pwsh')
+
+      await gw.lock({})
+      await gw.saveHost({ ...base, id: saved.id, allowLocalShell: true })
+      expect(names()).toContain('pwsh')
+      expect(s.localShellAgents.has(remote)).toBe(true)
+      // 保留后执行的是宿主内置 pwsh（本机实现），不是拒绝版本
+      const out = await s.call(remote, 'pwsh', { command: 'hostname' })
+      expect(out.isError).not.toBe(true)
+      expect(JSON.stringify(out.content)).toContain('LOCAL pwsh')
+
+      // 只改名（不带开关键）不影响
+      await gw.saveHost({ ...base, id: saved.id, label: 'renamed' })
+      expect(names()).toContain('pwsh')
+
+      await gw.saveHost({ ...base, id: saved.id, allowLocalShell: false })
+      expect(names()).not.toContain('pwsh')
+      expect(s.localShellAgents.has(remote)).toBe(false)
+    } finally {
+      real.dispose()
+    }
   })
 
   it('主机配置未开启 / 读取抛错时按默认隐藏 pwsh，其余工具照常接管', async () => {

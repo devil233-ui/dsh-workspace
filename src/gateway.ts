@@ -1162,8 +1162,8 @@ function logLocalShellChange(rt: WorkspaceRuntime, hostId: string, prev: boolean
     hostId,
     'config',
     next
-      ? '已允许该主机的远程工作区会话调用本机 shell（pwsh / powershell / cmd）—— 这些命令将在本机执行，重开会话后生效。'
-      : '已禁止该主机的远程工作区会话调用本机 shell，重开会话后生效。'
+      ? '已允许该主机的远程工作区会话调用本机 shell（pwsh / powershell / cmd）—— 这些命令将在本机执行；已打开的会话从下一轮对话起生效。'
+      : '已禁止该主机的远程工作区会话调用本机 shell；已打开的会话从下一轮对话起隐藏。'
   )
 }
 

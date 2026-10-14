@@ -190,7 +190,7 @@ export function apply(ctx: Context, config: PluginConfig): void {
   // 例外是 open_in_sidebar（本机 / 远程都注册，受「侧边栏」偏好 openInSidebar 控制，切换即时生效）。
   // 主机配置「远程会话保留本机 shell」：getHost 读明文字段，保险箱上锁时也能读到。
   const keepLocalShell = (hostId: string): boolean => runtime.vault.getHost(hostId)?.allowLocalShell === true
-  /** 挂载时实际保留了本机 shell 的 Agent：提示词据此说明（会话中途改配置时以已挂载的工具为准）。 */
+  /** 当前实际保留着本机 shell 的 Agent：提示词据此说明（随主机配置变化即时增删）。 */
   const localShellAgents = new WeakSet<object>()
   ctx.effect(
     () =>
@@ -204,6 +204,8 @@ export function apply(ctx: Context, config: PluginConfig): void {
           subscribe: (listener) => runtime.prefs.subscribe(() => listener())
         },
         keepLocalShell,
+        // 保存主机后已打开的远程会话即时同步（打开 / 关闭都不用重建会话）。
+        subscribeHosts: (listener) => runtime.vault.subscribe(listener),
         localShellAgents
       }),
     'dsh-workspace: agent tools'
@@ -241,7 +243,7 @@ function mountRemotePrompt(ctx: Context, runtime: WorkspaceRuntime, localShellAg
       if (binding === undefined) return ''
       const host = runtime.vault.listHosts().find((h) => h.id === binding.hostId)
       const label = host === undefined ? binding.hostId : `${host.label} (${host.username}@${host.hostname}:${host.port})`
-      // 已挂载了本机 shell 的会话一定要说明（即使中途关了开关）；中途刚打开、工具还没挂上时，提示词用「如果有」措辞兜底。
+      // 以会话实际状态为准（随配置即时同步）；拿不到会话对象时退回主机配置，提示词用「如果有」措辞兜底。
       const keep = (typeof scope === 'object' && scope !== null && localShellAgents.has(scope)) || host?.allowLocalShell === true
       return remotePromptText(binding, label, keep)
     }
