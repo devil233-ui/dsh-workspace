@@ -94,6 +94,8 @@ export const MAX_REMOTE_PATH_SEGMENTS = 8
  * 该分组的判据是「已登记工作区路径是它的祖先目录」，与目录名无关。
  * 逐段消毒（保留中文），丢弃空段与 . / ..；远程根没有段，用固定段兜住。
  * 超过 MAX_REMOTE_PATH_SEGMENTS 层时保留前面各段，剩余部分折叠成一个短哈希段（确定性，重复创建落位一致）。
+ * 注意：折叠使超过 8 层的远程路径不再保证占位目录的父子嵌套
+ *（/a/b/c/d/e/f/g/h/i 与 …/i/j 折叠后是兄弟节点而非祖先）——避免超过 Windows 路径长度上限的取舍。
  */
 export function remotePathSegments(remotePath: string): string[] {
   const segments = remotePath
@@ -221,11 +223,12 @@ export class BindingStore {
 
   /**
    * 返回一个不与别的远程目录冲突的落位：逐级检查从 endpoint 根到末级的每一层，
-   * 某层已被「别的」远程目录占据（登记或 meta 指向的远程路径不包含 input）时，
+   * 某层已被「别的」远程目录占据（登记或 meta 指向的远程路径不包含 input，或属于别的主机）时，
    * 从该层起目录名追加短哈希让位（确定性，重复创建落位一致）——否则占位目录会挂进别人的地盘
    * （例如 /srv/a*b/c 落进 /srv/a:b 的目录；大小写不敏感的文件系统上 /root/App 落进 /root/app）。
-   * 占据者包含 input（input 在其远程路径内部）是合法嵌套，照常穿过；
-   * 没有 meta 的目录是占位路径的中间层（例如先建了 /root/Yunzai，就有了 …/root），照旧收编。
+   * 占据者与 input 同主机且包含 input（input 在其远程路径内部）是合法嵌套，照常穿过；
+   * 没有登记与 meta 的目录是占位路径的中间层（例如先建了 /root/Yunzai，就有了 …/root），照旧收编——
+   * 但收编末级前要确认它下面没有别的远程工作区（防大小写变体抢走子工作区的父目录）。
    */
   private availableDir(input: { hostId: string; endpoint: string; remotePath: string }): string {
     const root = path.join(remoteWorkspacesRoot(), safeSegment(input.endpoint))
@@ -235,19 +238,31 @@ export class BindingStore {
   /** availableDir 的递归体：从 startDir 起逐级落下 segs，逐级做占据检查与让位。 */
   private walkAvailable(input: { hostId: string; endpoint: string; remotePath: string }, startDir: string, segs: string[]): string {
     const digest = createHash('sha256').update(`${input.hostId}\n${input.remotePath}`).digest('hex')
-    const claimOf = (candidate: string): string | undefined => {
+    type Claim = { hostId: string; remotePath: string }
+    const claimOf = (candidate: string): Claim | undefined => {
       const other = this.load().get(pathKey(candidate))
-      if (other !== undefined) return other.remotePath
+      if (other !== undefined) return { hostId: other.hostId, remotePath: other.remotePath }
       if (!existsSync(candidate)) return undefined
-      return this.fromMetaNoPersist(candidate)?.remotePath
+      return this.fromMetaNoPersist(candidate)
     }
-    const foreign = (claimed: string | undefined): boolean => claimed !== undefined && !isRemoteInside(input.remotePath, claimed)
+    // 同主机且占据者包含 input 才算合法嵌套；不同主机的目录一律让位，绝不共用同一个占位目录。
+    const foreign = (claimed: Claim | undefined): boolean =>
+      claimed !== undefined && (claimed.hostId !== input.hostId || !isRemoteInside(input.remotePath, claimed.remotePath))
     let dir = startDir
     let i = 0
     while (i < segs.length) {
       const seg = segs[i] as string
-      if (!foreign(claimOf(path.join(dir, seg)))) {
-        dir = path.join(dir, seg)
+      const candidate = path.join(dir, seg)
+      const claim = claimOf(candidate)
+      const last = i === segs.length - 1
+      const blocked =
+        foreign(claim) ||
+        // 末级收编没有任何登记与 meta 的目录前，确认它下面（同主机）已登记的工作区都在 input 之内：
+        // 大小写不敏感的文件系统上 /Root 会撞进 /root/Yunzai 的父目录 ep/root，照常收编会把子工作区挂错父，
+        // 之后再次创建 /root/Yunzai 还会因落位漂移登记出第二个占位目录（幂等失效）。
+        (claim === undefined && last && this.descendantOutside(input, candidate))
+      if (!blocked) {
+        dir = candidate
         i += 1
         continue
       }
@@ -276,7 +291,7 @@ export class BindingStore {
     return dir
   }
 
-  /** 在 dir 的直接子目录里找一个带 meta 且其远程路径包含 input 的「已让位」目录。 */
+  /** 在 dir 的直接子目录里找一个带 meta 且其远程路径包含 input 的「已让位」目录（同主机才认作同族）。 */
   private settledInside(input: { hostId: string; endpoint: string; remotePath: string }, dir: string): { dir: string; claim: string } | undefined {
     let entries: Dirent[]
     try {
@@ -287,11 +302,22 @@ export class BindingStore {
     for (const entry of entries) {
       if (!entry.isDirectory()) continue
       const candidate = path.join(dir, entry.name)
-      const claim = this.fromMetaNoPersist(candidate)?.remotePath
-      if (claim === undefined || !isRemoteInside(input.remotePath, claim)) continue
-      return { dir: candidate, claim }
+      const meta = this.fromMetaNoPersist(candidate)
+      if (meta === undefined || meta.hostId !== input.hostId || !isRemoteInside(input.remotePath, meta.remotePath)) continue
+      return { dir: candidate, claim: meta.remotePath }
     }
     return undefined
+  }
+
+  /** dir 子树内（同主机）已登记的工作区是否不全落在 input 远程路径之下——有外面的就 true，dir 不能被 input 收编。 */
+  private descendantOutside(input: { hostId: string; remotePath: string }, dir: string): boolean {
+    const prefix = `${pathKey(dir)}${path.sep}`
+    for (const b of this.load().values()) {
+      if (b.hostId !== input.hostId) continue
+      if (!pathKey(b.localPath).startsWith(prefix)) continue
+      if (!isRemoteInside(b.remotePath, input.remotePath)) return true
+    }
+    return false
   }
 
   /** 在给定目录落位：建目录、写 meta、登记并持久化（create 的共用尾段）。 */
@@ -319,10 +345,10 @@ export class BindingStore {
     return binding
   }
 
-  private fromMetaNoPersist(dir: string): { remotePath: string } | undefined {
+  private fromMetaNoPersist(dir: string): { hostId: string; remotePath: string } | undefined {
     try {
       const meta = JSON.parse(readFileSync(path.join(dir, WORKSPACE_META_FILE), 'utf8')) as Partial<MetaFile>
-      return typeof meta.remotePath === 'string' ? { remotePath: meta.remotePath } : undefined
+      return typeof meta.hostId === 'string' && typeof meta.remotePath === 'string' ? { hostId: meta.hostId, remotePath: meta.remotePath } : undefined
     } catch {
       return undefined
     }

@@ -146,6 +146,35 @@ describe('BindingStore', () => {
     expect(store.resolve(upper.localPath)?.remotePath).toBe('/root/App')
   })
 
+  it('不同主机的同一远程目录分别让位，互不覆盖登记（上游评审 #9 R2-A）', () => {
+    const store = new BindingStore()
+    const a = store.create({ hostId: 'h1', endpoint: 'ep', remotePath: '/srv/app', title: 'app' })
+    const b = store.create({ hostId: 'h2', endpoint: 'ep', remotePath: '/srv/app', title: 'app' })
+    expect(b.localPath).not.toBe(a.localPath)
+    expect(store.list()).toHaveLength(2)
+    expect(store.resolve(a.localPath)?.hostId).toBe('h1')
+    expect(store.resolve(b.localPath)?.hostId).toBe('h2')
+    // 重复创建各自幂等：回到原登记，不新增、不覆盖
+    expect(store.create({ hostId: 'h1', endpoint: 'ep', remotePath: '/srv/app', title: 'app' }).localPath).toBe(a.localPath)
+    expect(store.create({ hostId: 'h2', endpoint: 'ep', remotePath: '/srv/app', title: 'app' }).localPath).toBe(b.localPath)
+    expect(store.list()).toHaveLength(2)
+  })
+
+  it('大小写变体不收编已登记子工作区的父目录，再次创建原工作区仍幂等（上游评审 #9 R2-B）', () => {
+    const store = new BindingStore()
+    const child = store.create({ hostId: 'h1', endpoint: 'ep', remotePath: '/root/Yunzai', title: 'Yunzai' })
+    const upper = store.create({ hostId: 'h1', endpoint: 'ep', remotePath: '/Root', title: 'Root' })
+    // /Root 不得把子工作区的父目录 ep/root 当成自己的占位目录收编
+    expect(upper.localPath).not.toBe(path.dirname(child.localPath))
+    expect(store.resolve(path.dirname(child.localPath))?.remotePath).toBeUndefined()
+    expect(store.resolve(child.localPath)?.remotePath).toBe('/root/Yunzai')
+    expect(store.resolve(upper.localPath)?.remotePath).toBe('/Root')
+    // 幂等回归：/Root 收编失败后，再次创建 /root/Yunzai 落位不变、不新增重复登记
+    const again = store.create({ hostId: 'h1', endpoint: 'ep', remotePath: '/root/Yunzai', title: 'Yunzai' })
+    expect(again.localPath).toBe(child.localPath)
+    expect(store.list()).toHaveLength(2)
+  })
+
   it('映射表丢失后，新旧两条登记各自凭占位目录里的 meta 自愈（上游评审 #9 第 3 条）', () => {
     const store = new BindingStore()
     const legacyDir = path.join(remoteWorkspacesRoot(), input.endpoint, folderName(input.title))
