@@ -309,13 +309,12 @@ export class BindingStore {
     return undefined
   }
 
-  /** dir 子树内（同主机）已登记的工作区是否不全落在 input 远程路径之下——有外面的就 true，dir 不能被 input 收编。 */
+  /** dir 子树内已登记的工作区是否不全属于本主机、或不全落在 input 远程路径之下——有就 true，dir 不能被 input 收编。 */
   private descendantOutside(input: { hostId: string; remotePath: string }, dir: string): boolean {
     const prefix = `${pathKey(dir)}${path.sep}`
     for (const b of this.load().values()) {
-      if (b.hostId !== input.hostId) continue
       if (!pathKey(b.localPath).startsWith(prefix)) continue
-      if (!isRemoteInside(b.remotePath, input.remotePath)) return true
+      if (b.hostId !== input.hostId || !isRemoteInside(b.remotePath, input.remotePath)) return true
     }
     return false
   }

@@ -175,6 +175,21 @@ describe('BindingStore', () => {
     expect(store.list()).toHaveLength(2)
   })
 
+  it('跨主机不收编已登记子工作区的父目录，再次创建原工作区仍幂等（上游评审 #9 R3-X）', () => {
+    const store = new BindingStore()
+    // h2 先建 /root/Yunzai（落在 ep/root/Yunzai），h1 再建 /root 时不得把中间层 ep/root 收编挂到自己名下
+    const child = store.create({ hostId: 'h2', endpoint: 'ep', remotePath: '/root/Yunzai', title: 'c' })
+    const parent = store.create({ hostId: 'h1', endpoint: 'ep', remotePath: '/root', title: 'p' })
+    expect(parent.localPath).not.toBe(path.dirname(child.localPath))
+    expect(store.resolve(path.dirname(child.localPath))?.hostId).toBeUndefined()
+    expect(store.resolve(parent.localPath)?.remotePath).toBe('/root')
+    expect(store.resolve(child.localPath)?.hostId).toBe('h2')
+    // 幂等回归：h2 再次创建 /root/Yunzai 回原目录，不新增重复登记
+    const again = store.create({ hostId: 'h2', endpoint: 'ep', remotePath: '/root/Yunzai', title: 'c' })
+    expect(again.localPath).toBe(child.localPath)
+    expect(store.list()).toHaveLength(2)
+  })
+
   it('映射表丢失后，新旧两条登记各自凭占位目录里的 meta 自愈（上游评审 #9 第 3 条）', () => {
     const store = new BindingStore()
     const legacyDir = path.join(remoteWorkspacesRoot(), input.endpoint, folderName(input.title))
