@@ -56,31 +56,5 @@ export function safeSegment(input: string): string {
   return cleaned === '' ? '_' : cleaned
 }
 
-/**
- * 远程工作区对应的本地目录。
- *
- * 宿主 workspaceRegistry.create() 会对 path 做 realpath + isDirectory 校验，
- * 所以远程工作区的 path 必须指向一个本地真实目录 —— 这个目录就是它。
- * 目录内会写一份 meta 文件，作为映射表丢失时的重建依据。
- */
-export function workspaceDirFor(
-  hostname: string,
-  username: string,
-  port: number,
-  remotePath: string
-): string {
-  const endpoint = safeSegment([hostname, username, String(port)].filter(Boolean).join('-'))
-  const base = safeSegment(remotePathBasename(remotePath))
-  return path.join(pluginRoot(), endpoint, base)
-}
-
-/** 取远程路径的最后一段作为目录名；根路径退化为 `root`。 */
-export function remotePathBasename(remotePath: string): string {
-  const trimmed = remotePath.replace(/\/+$/, '')
-  if (trimmed === '' || trimmed === '/') return 'root'
-  const idx = trimmed.lastIndexOf('/')
-  return idx === -1 ? trimmed : trimmed.slice(idx + 1)
-}
-
 /** 工作区目录内的 meta 文件名（映射表的双保险）。 */
 export const WORKSPACE_META_FILE = '.dsh-workspace.json'

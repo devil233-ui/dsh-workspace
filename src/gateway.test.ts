@@ -444,7 +444,7 @@ describe('添加工作区（createRemoteWorkspace / setTakeover）', () => {
     const saved = await gw.saveHost(host({ hostname: 'box.example', username: 'ps', auth: { kind: 'agent' } }))
     rt.files.statPath = async () => ({ type: 'dir', size: 0, mtimeMs: 0 })
     const a = await gw.createRemoteWorkspace({ hostId: saved.id, remotePath: '/home/ps/中山渔业/', title: '渔业' })
-    expect(path.basename(a.localPath)).toBe('渔业')
+    expect(path.basename(a.localPath)).toBe('中山渔业')
     expect(a.localPath).toContain('box.example-ps-22')
     expect(rt.bindings.resolve(a.localPath)).toMatchObject({ hostId: saved.id, remotePath: '/home/ps/中山渔业' })
     const again = await gw.createRemoteWorkspace({ hostId: saved.id, remotePath: '/home/ps/中山渔业', title: '渔业' })
